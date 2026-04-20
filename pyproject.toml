@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.backends.legacy:build"
+
+[project]
+name = "keyorix"
+version = "0.1.0"
+description = "Python client for Keyorix — lightweight on-premise secrets manager"
+readme = "README.md"
+license = {text = "AGPL-3.0"}
+requires-python = ">=3.8"
+dependencies = []
+keywords = ["secrets", "security", "devops", "keyorix"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: GNU Affero General Public License v3",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Security",
+]
+
+[project.urls]
+Homepage = "https://keyorix.com"
+Repository = "https://github.com/keyorixhq/keyorix-py"
+Issues = "https://github.com/keyorixhq/keyorix-py/issues"
