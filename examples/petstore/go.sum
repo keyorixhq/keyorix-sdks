@@ -1,0 +1,4 @@
+github.com/keyorixhq/keyorix-go v0.1.0 h1:huM6ykv+o5QCdsoP/rjT/0h4If7cp7qa+GXSRAjT5ug=
+github.com/keyorixhq/keyorix-go v0.1.0/go.mod h1:OO1d5jpLBWatXdchmnWMP2Y0lPV1seAeFMOHpHWDVV4=
+github.com/lib/pq v1.10.9 h1:YXG7RB+JIjhP29X+OtkiDnYaXQwpS4JEWq7dtCCRUEw=
+github.com/lib/pq v1.10.9/go.mod h1:AlVN5x4E4T544tWzH6hKfbfQvm3HdbOxrmggDNAPY9o=
