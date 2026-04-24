@@ -190,7 +190,7 @@ class Client:
         raise SecretNotFoundError(f"Secret {name!r} not found{env_msg}")
 
     def _get_secret_value(self, secret_id: int) -> str:
-        data = self._request("GET", f"/api/v1/secrets/{secret_id}/value")
+        data = self._request("GET", f"/api/v1/secrets/{secret_id}?include_value=true")
         return data.get("data", {}).get("value", "")
 
 
