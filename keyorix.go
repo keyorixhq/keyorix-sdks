@@ -170,7 +170,7 @@ func (c *Client) ListSecrets(ctx context.Context, environment string) ([]Secret,
 
 // getSecretValue fetches the decrypted value for a secret by ID.
 func (c *Client) getSecretValue(ctx context.Context, secretID uint) (string, error) {
-	endpoint := fmt.Sprintf("%s/api/v1/secrets/%d/value", c.baseURL, secretID)
+	endpoint := fmt.Sprintf("%s/api/v1/secrets/%d?include_value=true", c.baseURL, secretID)
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
