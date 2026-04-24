@@ -1,0 +1,21 @@
+{
+  "name": "keyorix",
+  "version": "0.1.0",
+  "description": "Node.js SDK for Keyorix — lightweight on-premise secrets manager",
+  "main": "keyorix.js",
+  "types": "keyorix.d.ts",
+  "scripts": {
+    "test": "node test.js"
+  },
+  "keywords": ["secrets", "security", "devops", "keyorix"],
+  "author": "Keyorix HQ",
+  "license": "AGPL-3.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/keyorixhq/keyorix-node.git"
+  },
+  "homepage": "https://keyorix.com",
+  "engines": {
+    "node": ">=18"
+  }
+}
