@@ -1,0 +1,29 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: petstore
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-changeme}
+      POSTGRES_DB: petstore
+    ports:
+      - "5435:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U petstore"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  petstore:
+    build: .
+    ports:
+      - "3003:3003"
+    environment:
+      KEYORIX_SERVER: ${KEYORIX_SERVER:?KEYORIX_SERVER is required}
+      KEYORIX_TOKEN: ${KEYORIX_TOKEN:?KEYORIX_TOKEN is required}
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_USER: petstore
+      DB_NAME: petstore
+    depends_on:
+      postgres:
+        condition: service_healthy

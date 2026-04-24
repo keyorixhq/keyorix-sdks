@@ -1,0 +1,13 @@
+{
+  "name": "keyorix-petstore-node",
+  "version": "0.1.0",
+  "description": "Keyorix pet store example — Node.js",
+  "main": "main.js",
+  "scripts": {
+    "start": "node main.js"
+  },
+  "dependencies": {
+    "keyorix": "^0.1.0",
+    "pg": "^8.11.0"
+  }
+}
