@@ -29,22 +29,26 @@ from typing import List, Optional
 
 class KeyorixError(Exception):
     """Raised when the Keyorix API returns an error."""
+
     pass
 
 
 class AuthError(KeyorixError):
     """Raised on authentication failure."""
+
     pass
 
 
 class SecretNotFoundError(KeyorixError):
     """Raised when a secret cannot be found."""
+
     pass
 
 
 @dataclass
 class Secret:
     """A secret returned by the Keyorix API."""
+
     id: int
     name: str
     type: str
