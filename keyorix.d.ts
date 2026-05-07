@@ -2,9 +2,22 @@ export interface Secret {
   id: number;
   name: string;
   type: string;
+  projectId: number;
   environment: string;
-  namespace: string;
   createdAt: string;
+}
+
+export interface Project {
+  id: number;
+  name: string;
+  description: string;
+  createdAt: string;
+}
+
+export interface Environment {
+  id: number;
+  projectId: number;
+  name: string;
 }
 
 export interface ClientOptions {
@@ -27,4 +40,7 @@ export declare class Client {
   health(): Promise<boolean>;
   listSecrets(environment?: string): Promise<Secret[]>;
   getSecret(name: string, environment?: string): Promise<string>;
+  listProjects(): Promise<Project[]>;
+  createProject(name: string, description?: string): Promise<Project>;
+  listEnvironments(projectId: number): Promise<Environment[]>;
 }

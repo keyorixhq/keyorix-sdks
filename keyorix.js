@@ -184,8 +184,8 @@ class Client {
       id: s.ID,
       name: s.Name,
       type: s.Type,
+      projectId: s.ProjectID,
       environment: s.environment_name,
-      namespace: s.namespace_name,
       createdAt: s.CreatedAt,
     }));
   }
@@ -209,6 +209,59 @@ class Client {
   async _getSecretValue(secretId) {
     const data = await this._request(`/api/v1/secrets/${secretId}?include_value=true`);
     return data?.data?.value || '';
+  }
+
+  /**
+   * List all projects.
+   * @returns {Promise<Array>}
+   */
+  async listProjects() {
+    const data = await this._request('/api/v1/projects');
+    return (data?.data?.projects || []).map((p) => ({
+      id: p.ID, name: p.Name, description: p.Description, createdAt: p.CreatedAt,
+    }));
+  }
+
+  /**
+   * Create a new project. Seeds development/staging/production environments.
+   * @param {string} name
+   * @param {string} [description]
+   * @returns {Promise<object>} Created project
+   */
+  async createProject(name, description = '') {
+    const body = JSON.stringify({ name, description });
+    const options = {
+      ...this._parsed,
+      path: '/api/v1/projects',
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${this._token}`,
+        'Content-Type': 'application/json',
+        'Content-Length': Buffer.byteLength(body),
+      },
+      timeout: this._timeout,
+    };
+    let resp;
+    try { resp = await request(options, body); } catch (err) {
+      throw new KeyorixError(`Request failed: ${err.message}`);
+    }
+    if (resp.status !== 200 && resp.status !== 201) {
+      throw new KeyorixError(`Server returned ${resp.status}: ${resp.body}`);
+    }
+    const p = JSON.parse(resp.body)?.data || {};
+    return { id: p.ID, name: p.Name, description: p.Description, createdAt: p.CreatedAt };
+  }
+
+  /**
+   * List environments for a project.
+   * @param {number} projectId
+   * @returns {Promise<Array>}
+   */
+  async listEnvironments(projectId) {
+    const data = await this._request(`/api/v1/projects/${projectId}/environments`);
+    return (data?.data?.environments || []).map((e) => ({
+      id: e.ID, projectId: e.ProjectID, name: e.Name,
+    }));
   }
 }
 
