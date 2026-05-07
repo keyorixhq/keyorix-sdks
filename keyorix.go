@@ -29,9 +29,24 @@ type Secret struct {
 	ID          uint      `json:"ID"`
 	Name        string    `json:"Name"`
 	Type        string    `json:"Type"`
+	ProjectID   uint      `json:"ProjectID"`
 	Environment string    `json:"environment_name"`
-	Namespace   string    `json:"namespace_name"`
 	CreatedAt   time.Time `json:"CreatedAt"`
+}
+
+// Project represents a Keyorix project.
+type Project struct {
+	ID          uint      `json:"ID"`
+	Name        string    `json:"Name"`
+	Description string    `json:"Description"`
+	CreatedAt   time.Time `json:"CreatedAt"`
+}
+
+// Environment represents an environment scoped to a project.
+type Environment struct {
+	ID        uint   `json:"ID"`
+	ProjectID uint   `json:"ProjectID"`
+	Name      string `json:"Name"`
 }
 
 // SecretValue contains the decrypted value of a secret.
@@ -218,4 +233,95 @@ func (c *Client) Health(ctx context.Context) error {
 		return fmt.Errorf("keyorix: server unhealthy (HTTP %d)", resp.StatusCode)
 	}
 	return nil
+}
+
+// ListProjects returns all projects visible to the authenticated user.
+func (c *Client) ListProjects(ctx context.Context) ([]Project, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/api/v1/projects", nil)
+	if err != nil {
+		return nil, fmt.Errorf("keyorix: failed to create request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+c.token)
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("keyorix: request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("keyorix: server returned %d: %s", resp.StatusCode, string(body))
+	}
+
+	var result struct {
+		Data struct {
+			Projects []Project `json:"projects"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, fmt.Errorf("keyorix: failed to parse response: %w", err)
+	}
+	return result.Data.Projects, nil
+}
+
+// CreateProject creates a new project and seeds default environments.
+func (c *Client) CreateProject(ctx context.Context, name, description string) (*Project, error) {
+	body, _ := json.Marshal(map[string]string{"name": name, "description": description})
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/api/v1/projects", bytes.NewReader(body))
+	if err != nil {
+		return nil, fmt.Errorf("keyorix: failed to create request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+c.token)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("keyorix: request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusCreated && resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("keyorix: server returned %d: %s", resp.StatusCode, string(body))
+	}
+
+	var result struct {
+		Data Project `json:"data"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, fmt.Errorf("keyorix: failed to parse response: %w", err)
+	}
+	return &result.Data, nil
+}
+
+// ListEnvironments returns all environments for a given project.
+func (c *Client) ListEnvironments(ctx context.Context, projectID uint) ([]Environment, error) {
+	endpoint := fmt.Sprintf("%s/api/v1/projects/%d/environments", c.baseURL, projectID)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return nil, fmt.Errorf("keyorix: failed to create request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+c.token)
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("keyorix: request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("keyorix: server returned %d: %s", resp.StatusCode, string(body))
+	}
+
+	var result struct {
+		Data struct {
+			Environments []Environment `json:"environments"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, fmt.Errorf("keyorix: failed to parse response: %w", err)
+	}
+	return result.Data.Environments, nil
 }
