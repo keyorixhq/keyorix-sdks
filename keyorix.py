@@ -52,8 +52,8 @@ class Secret:
     id: int
     name: str
     type: str
+    project_id: int
     environment: str
-    namespace: str
     created_at: str
 
     @classmethod
@@ -62,9 +62,45 @@ class Secret:
             id=data.get("ID", 0),
             name=data.get("Name", ""),
             type=data.get("Type", ""),
+            project_id=data.get("ProjectID", 0),
             environment=data.get("environment_name", ""),
-            namespace=data.get("namespace_name", ""),
             created_at=data.get("CreatedAt", ""),
+        )
+
+
+@dataclass
+class Project:
+    """A Keyorix project."""
+
+    id: int
+    name: str
+    description: str
+    created_at: str
+
+    @classmethod
+    def _from_dict(cls, data: dict) -> "Project":
+        return cls(
+            id=data.get("ID", 0),
+            name=data.get("Name", ""),
+            description=data.get("Description", ""),
+            created_at=data.get("CreatedAt", ""),
+        )
+
+
+@dataclass
+class Environment:
+    """An environment scoped to a project."""
+
+    id: int
+    project_id: int
+    name: str
+
+    @classmethod
+    def _from_dict(cls, data: dict) -> "Environment":
+        return cls(
+            id=data.get("ID", 0),
+            project_id=data.get("ProjectID", 0),
+            name=data.get("Name", ""),
         )
 
 
@@ -196,6 +232,55 @@ class Client:
     def _get_secret_value(self, secret_id: int) -> str:
         data = self._request("GET", f"/api/v1/secrets/{secret_id}?include_value=true")
         return data.get("data", {}).get("value", "")
+
+    def list_projects(self) -> List["Project"]:
+        """List all projects visible to the authenticated user.
+
+        Returns:
+            List of Project objects
+        """
+        data = self._request("GET", "/api/v1/projects")
+        return [Project._from_dict(p) for p in data.get("data", {}).get("projects", [])]
+
+    def create_project(self, name: str, description: str = "") -> "Project":
+        """Create a new project. Seeds development/staging/production environments.
+
+        Args:
+            name: Project name (must be unique)
+            description: Optional description
+
+        Returns:
+            Created Project object
+        """
+        payload = json.dumps({"name": name, "description": description}).encode()
+        req = urllib.request.Request(
+            f"{self._base}/api/v1/projects",
+            data=payload,
+            headers={
+                "Authorization": f"Bearer {self._token}",
+                "Content-Type": "application/json",
+            },
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=self._timeout) as resp:
+                data = json.loads(resp.read())
+                return Project._from_dict(data.get("data", {}))
+        except urllib.error.HTTPError as e:
+            body = e.read().decode(errors="replace")
+            raise KeyorixError(f"Failed to create project (HTTP {e.code}): {body}") from e
+
+    def list_environments(self, project_id: int) -> List["Environment"]:
+        """List all environments for a project.
+
+        Args:
+            project_id: ID of the project
+
+        Returns:
+            List of Environment objects
+        """
+        data = self._request("GET", f"/api/v1/projects/{project_id}/environments")
+        return [Environment._from_dict(e) for e in data.get("data", {}).get("environments", [])]
 
 
 # Fix missing import
