@@ -8,15 +8,15 @@ public class Secret {
     private final String name;
     private final String type;
     private final String environment;
-    private final String namespace;
+    private final long projectId;
     private final String createdAt;
 
-    public Secret(long id, String name, String type, String environment, String namespace, String createdAt) {
+    public Secret(long id, String name, String type, String environment, long projectId, String createdAt) {
         this.id = id;
         this.name = name;
         this.type = type;
         this.environment = environment;
-        this.namespace = namespace;
+        this.projectId = projectId;
         this.createdAt = createdAt;
     }
 
@@ -24,7 +24,7 @@ public class Secret {
     public String getName()      { return name; }
     public String getType()      { return type; }
     public String getEnvironment() { return environment; }
-    public String getNamespace() { return namespace; }
+    public long getProjectId()   { return projectId; }
     public String getCreatedAt() { return createdAt; }
 
     @Override

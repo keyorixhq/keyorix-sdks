@@ -34,12 +34,12 @@ class KeyorixClientTest {
 
     @Test
     void testSecretModel() {
-        Secret s = new Secret(1L, "db-password", "password", "production", "default", "2026-01-01");
+        Secret s = new Secret(1L, "db-password", "password", "production", 1L, "2026-01-01");
         assertEquals(1L, s.getId());
         assertEquals("db-password", s.getName());
         assertEquals("password", s.getType());
         assertEquals("production", s.getEnvironment());
-        assertEquals("default", s.getNamespace());
+        assertEquals(1L, s.getProjectId());
         assertTrue(s.toString().contains("db-password"));
     }
 
@@ -58,15 +58,17 @@ class KeyorixClientTest {
     @Test
     void testJsonParser_parseSecretList() {
         String json = "{\"data\":{\"secrets\":[" +
-            "{\"ID\":1,\"Name\":\"db-password\",\"Type\":\"password\",\"environment_name\":\"production\",\"namespace_name\":\"default\",\"CreatedAt\":\"2026-01-01\"}," +
-            "{\"ID\":2,\"Name\":\"api-key\",\"Type\":\"generic\",\"environment_name\":\"staging\",\"namespace_name\":\"default\",\"CreatedAt\":\"2026-01-02\"}" +
+            "{\"ID\":1,\"Name\":\"db-password\",\"Type\":\"password\",\"environment_name\":\"production\",\"ProjectID\":1,\"CreatedAt\":\"2026-01-01\"}," +
+            "{\"ID\":2,\"Name\":\"api-key\",\"Type\":\"generic\",\"environment_name\":\"staging\",\"ProjectID\":2,\"CreatedAt\":\"2026-01-02\"}" +
             "]}}";
         java.util.List<Secret> secrets = JsonParser.parseSecretList(json);
         assertEquals(2, secrets.size());
         assertEquals("db-password", secrets.get(0).getName());
         assertEquals("production", secrets.get(0).getEnvironment());
+        assertEquals(1L, secrets.get(0).getProjectId());
         assertEquals("api-key", secrets.get(1).getName());
         assertEquals("staging", secrets.get(1).getEnvironment());
+        assertEquals(2L, secrets.get(1).getProjectId());
     }
 
     @Test

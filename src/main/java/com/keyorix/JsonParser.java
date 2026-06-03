@@ -44,11 +44,11 @@ class JsonParser {
             String name = extractString(obj, "Name");
             String type = extractString(obj, "Type");
             String env = extractString(obj, "environment_name");
-            String ns = extractString(obj, "namespace_name");
+            long projectId = parseLong(obj, "ProjectID");
             String createdAt = extractString(obj, "CreatedAt");
             if (name == null) return null;
             return new Secret(id, name, type != null ? type : "", env != null ? env : "",
-                              ns != null ? ns : "", createdAt != null ? createdAt : "");
+                              projectId, createdAt != null ? createdAt : "");
         } catch (Exception e) {
             return null;
         }
