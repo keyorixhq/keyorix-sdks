@@ -28,7 +28,7 @@ class TestClient(unittest.TestCase):
             "Name": "db-password",
             "Type": "password",
             "environment_name": "production",
-            "namespace_name": "default",
+            "ProjectID": 1,
             "CreatedAt": "2026-04-19T00:00:00Z",
         }
         secret = keyorix.Secret._from_dict(data)
@@ -36,6 +36,7 @@ class TestClient(unittest.TestCase):
         self.assertEqual(secret.name, "db-password")
         self.assertEqual(secret.type, "password")
         self.assertEqual(secret.environment, "production")
+        self.assertEqual(secret.project_id, 1)
 
     def test_secret_not_found_error(self):
         self.assertTrue(issubclass(keyorix.SecretNotFoundError, keyorix.KeyorixError))
