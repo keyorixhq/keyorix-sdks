@@ -27,7 +27,7 @@ import (
 	"time"
 
 	keyorix "github.com/keyorixhq/keyorix-go"
-	_ "github.com/lib/pq"
+	_ "github.com/lib/pq" // registers the postgres driver with database/sql
 )
 
 type Pet struct {
@@ -36,6 +36,11 @@ type Pet struct {
 	Species   string    `json:"species"`
 	CreatedAt time.Time `json:"created_at"`
 }
+
+const (
+	contentTypeJSON = "application/json"
+	headerContentType = "Content-Type"
+)
 
 var db *sql.DB
 
@@ -117,7 +122,7 @@ func main() {
 	mux.HandleFunc("GET /pets/{id}", getPet)
 	mux.HandleFunc("DELETE /pets/{id}", deletePet)
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set(headerContentType, contentTypeJSON)
 		json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 	})
 
@@ -148,7 +153,7 @@ func listPets(w http.ResponseWriter, r *http.Request) {
 		pets = append(pets, p)
 	}
 
-	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set(headerContentType, contentTypeJSON)
 	json.NewEncoder(w).Encode(pets)
 }
 
@@ -176,7 +181,7 @@ func createPet(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set(headerContentType, contentTypeJSON)
 	w.WriteHeader(http.StatusCreated)
 	json.NewEncoder(w).Encode(p)
 }
@@ -201,7 +206,7 @@ func getPet(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set(headerContentType, contentTypeJSON)
 	json.NewEncoder(w).Encode(p)
 }
 

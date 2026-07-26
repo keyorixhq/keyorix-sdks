@@ -17,6 +17,8 @@ import (
 	"time"
 )
 
+const authBearer = "Bearer "
+
 // Client is a Keyorix API client.
 type Client struct {
 	baseURL    string
@@ -155,7 +157,7 @@ func (c *Client) ListSecrets(ctx context.Context, environment string) ([]Secret,
 	if err != nil {
 		return nil, fmt.Errorf("keyorix: failed to create request: %w", err)
 	}
-	req.Header.Set("Authorization", "Bearer "+c.token)
+	req.Header.Set("Authorization", authBearer+c.token)
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
@@ -191,7 +193,7 @@ func (c *Client) getSecretValue(ctx context.Context, secretID uint) (string, err
 	if err != nil {
 		return "", fmt.Errorf("keyorix: failed to create request: %w", err)
 	}
-	req.Header.Set("Authorization", "Bearer "+c.token)
+	req.Header.Set("Authorization", authBearer+c.token)
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
@@ -241,7 +243,7 @@ func (c *Client) ListProjects(ctx context.Context) ([]Project, error) {
 	if err != nil {
 		return nil, fmt.Errorf("keyorix: failed to create request: %w", err)
 	}
-	req.Header.Set("Authorization", "Bearer "+c.token)
+	req.Header.Set("Authorization", authBearer+c.token)
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
@@ -272,7 +274,7 @@ func (c *Client) CreateProject(ctx context.Context, name, description string) (*
 	if err != nil {
 		return nil, fmt.Errorf("keyorix: failed to create request: %w", err)
 	}
-	req.Header.Set("Authorization", "Bearer "+c.token)
+	req.Header.Set("Authorization", authBearer+c.token)
 	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := c.httpClient.Do(req)
@@ -302,7 +304,7 @@ func (c *Client) ListEnvironments(ctx context.Context, projectID uint) ([]Enviro
 	if err != nil {
 		return nil, fmt.Errorf("keyorix: failed to create request: %w", err)
 	}
-	req.Header.Set("Authorization", "Bearer "+c.token)
+	req.Header.Set("Authorization", authBearer+c.token)
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {

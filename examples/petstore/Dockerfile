@@ -5,9 +5,11 @@ RUN go mod download
 COPY . .
 RUN go build -o petstore .
 
-FROM alpine:latest
+FROM alpine:3.21
 RUN apk add --no-cache ca-certificates
+RUN addgroup -S appgroup && adduser -S appuser -G appgroup
 WORKDIR /app
 COPY --from=builder /app/petstore .
+USER appuser
 EXPOSE 3001
 CMD ["./petstore"]
