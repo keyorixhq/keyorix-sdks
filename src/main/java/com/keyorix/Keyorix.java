@@ -18,6 +18,8 @@ import java.time.Duration;
  */
 public final class Keyorix {
 
+    private static final String LOGIN_PATH = "/auth/login";
+
     private Keyorix() {}
 
     /**
@@ -38,7 +40,7 @@ public final class Keyorix {
      * Authenticates with the Keyorix server and returns a session token.
      */
     public static String login(String serverUrl, String username, String password, Duration timeout) throws KeyorixException {
-        String url = serverUrl.replaceAll("/$", "") + "/auth/login";
+        String url = serverUrl.replaceAll("/$", "") + LOGIN_PATH;
         String body = "{\"username\":\"" + escape(username) + "\",\"password\":\"" + escape(password) + "\"}";
 
         try {
