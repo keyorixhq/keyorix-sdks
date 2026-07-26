@@ -7,7 +7,6 @@
     "start": "node main.js"
   },
   "dependencies": {
-    "keyorix": "^0.1.0",
     "pg": "^8.11.0"
   }
 }

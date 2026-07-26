@@ -15,54 +15,62 @@
  *   node main.js
  */
 
-const http = require('http');
+const http = require('node:http');
 const { Client } = require('keyorix');
 const { Pool } = require('pg');
 
 let pool;
 
+// ── Route handlers ───────────────────────────────────────────────────────────
+
+async function getPetById(res, id) {
+  const { rows } = await pool.query('SELECT id, name, species, created_at FROM pets WHERE id = $1', [id]);
+  if (rows.length === 0) return json(res, 404, { error: 'pet not found' });
+  return json(res, 200, rows[0]);
+}
+
+async function createPet(req, res) {
+  const body = await readBody(req);
+  const { name, species } = JSON.parse(body);
+  if (!name || !species) return json(res, 400, { error: 'name and species are required' });
+  const { rows } = await pool.query(
+    'INSERT INTO pets (name, species) VALUES ($1, $2) RETURNING id, name, species, created_at',
+    [name, species]
+  );
+  return json(res, 201, rows[0]);
+}
+
+async function deletePet(res, id) {
+  const { rowCount } = await pool.query('DELETE FROM pets WHERE id = $1', [id]);
+  if (rowCount === 0) return json(res, 404, { error: 'pet not found' });
+  res.writeHead(204);
+  return res.end();
+}
+
 // ── Router ───────────────────────────────────────────────────────────────────
 
 async function handleRequest(req, res) {
-  const url = new URL(req.url, `http://localhost`);
+  const url = new URL(req.url, 'http://localhost');
   const path = url.pathname.replace(/\/$/, '');
+  const petIdMatch = /^\/pets\/(\d+)$/.exec(path);
 
   try {
     if (req.method === 'GET' && path === '/health') {
       return json(res, 200, { status: 'ok' });
     }
-
     if (req.method === 'GET' && path === '/pets') {
       const { rows } = await pool.query('SELECT id, name, species, created_at FROM pets ORDER BY id');
       return json(res, 200, rows);
     }
-
-    if (req.method === 'GET' && path.match(/^\/pets\/\d+$/)) {
-      const id = parseInt(path.split('/')[2]);
-      const { rows } = await pool.query('SELECT id, name, species, created_at FROM pets WHERE id = $1', [id]);
-      if (rows.length === 0) return json(res, 404, { error: 'pet not found' });
-      return json(res, 200, rows[0]);
+    if (req.method === 'GET' && petIdMatch) {
+      return await getPetById(res, Number.parseInt(petIdMatch[1], 10));
     }
-
     if (req.method === 'POST' && path === '/pets') {
-      const body = await readBody(req);
-      const { name, species } = JSON.parse(body);
-      if (!name || !species) return json(res, 400, { error: 'name and species are required' });
-      const { rows } = await pool.query(
-        'INSERT INTO pets (name, species) VALUES ($1, $2) RETURNING id, name, species, created_at',
-        [name, species]
-      );
-      return json(res, 201, rows[0]);
+      return await createPet(req, res);
     }
-
-    if (req.method === 'DELETE' && path.match(/^\/pets\/\d+$/)) {
-      const id = parseInt(path.split('/')[2]);
-      const { rowCount } = await pool.query('DELETE FROM pets WHERE id = $1', [id]);
-      if (rowCount === 0) return json(res, 404, { error: 'pet not found' });
-      res.writeHead(204);
-      return res.end();
+    if (req.method === 'DELETE' && petIdMatch) {
+      return await deletePet(res, Number.parseInt(petIdMatch[1], 10));
     }
-
     json(res, 404, { error: 'not found' });
   } catch (err) {
     console.error(err);

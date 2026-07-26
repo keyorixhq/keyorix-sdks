@@ -15,8 +15,8 @@
  *   const secrets = await client.listSecrets('production');
  */
 
-const http = require('http');
-const https = require('https');
+const http = require('node:http');
+const https = require('node:https');
 
 // ── Errors ───────────────────────────────────────────────────────────────────
 

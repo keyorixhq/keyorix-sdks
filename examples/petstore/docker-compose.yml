@@ -14,7 +14,9 @@ services:
       retries: 10
 
   petstore:
-    build: .
+    build:
+      context: ../..
+      dockerfile: examples/petstore/Dockerfile
     ports:
       - "3003:3003"
     environment:
