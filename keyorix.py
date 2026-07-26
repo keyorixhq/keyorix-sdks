@@ -188,7 +188,7 @@ class Client:
         try:
             with urllib.request.urlopen(req, timeout=self._timeout) as resp:
                 return resp.status == 200
-        except (urllib.error.HTTPError, urllib.error.URLError) as e:
+        except urllib.error.URLError as e:
             raise KeyorixError(f"Server unreachable: {e}") from e
 
     def list_secrets(self, environment: str = "") -> List[Secret]:

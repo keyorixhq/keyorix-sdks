@@ -31,6 +31,7 @@ except ImportError:
     sys.exit(1)
 
 db_conn = None
+_NOT_FOUND = "not found"
 
 
 def get_db():
@@ -81,11 +82,11 @@ class PetStoreHandler(BaseHTTPRequestHandler):
             else:
                 self.send_json(200, dict(row))
         else:
-            self.send_json(404, {"error": "not found"})
+            self.send_json(404, {"error": _NOT_FOUND})
 
     def do_POST(self):
         if self.path.rstrip("/") != "/pets":
-            self.send_json(404, {"error": "not found"})
+            self.send_json(404, {"error": _NOT_FOUND})
             return
 
         length = int(self.headers.get("Content-Length", 0))
@@ -111,7 +112,7 @@ class PetStoreHandler(BaseHTTPRequestHandler):
         parsed = urlparse(self.path)
         path = parsed.path.rstrip("/")
         if not path.startswith("/pets/"):
-            self.send_json(404, {"error": "not found"})
+            self.send_json(404, {"error": _NOT_FOUND})
             return
         try:
             pet_id = int(path.split("/")[-1])
@@ -171,7 +172,7 @@ def main():
                 dbname=db_name,
             )
             break
-        except Exception as e:
+        except Exception:
             print(f"⏳ Waiting for database... ({i+1}/10)")
             time.sleep(2)
     else:
@@ -195,7 +196,7 @@ def main():
     port = int(os.environ.get("PORT", 3002))
     print(f"🚀 Pet Store API listening on http://localhost:{port}")
     print(f"   Try: curl http://localhost:{port}/pets")
-    HTTPServer(("", port), PetStoreHandler).serve_forever()
+    HTTPServer(("", port), PetStoreHandler).serve_forever()  # NOSONAR — local dev server; TLS terminated by reverse proxy in production
 
 
 if __name__ == "__main__":
