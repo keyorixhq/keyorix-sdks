@@ -2,13 +2,11 @@ package com.keyorix;
 
 import java.io.IOException;
 import java.io.InputStream;
-import java.io.OutputStream;
 import java.net.HttpURLConnection;
 import java.net.URL;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
-import java.util.ArrayList;
 import java.util.List;
 
 /**
@@ -24,6 +22,9 @@ import java.util.List;
  * </pre>
  */
 public class KeyorixClient {
+
+    private static final String SECRETS_PATH = "/api/v1/secrets";
+    private static final String HEALTH_PATH = "/health";
 
     private final String baseUrl;
     private final String token;
@@ -80,7 +81,7 @@ public class KeyorixClient {
      * @throws KeyorixException if an API error occurs
      */
     public List<Secret> listSecrets(String environment) throws KeyorixException {
-        String path = "/api/v1/secrets";
+        String path = SECRETS_PATH;
         if (environment != null && !environment.isEmpty()) {
             path += "?environment=" + URLEncoder.encode(environment, StandardCharsets.UTF_8);
         }
@@ -96,7 +97,7 @@ public class KeyorixClient {
      */
     public boolean health() throws KeyorixException {
         try {
-            HttpURLConnection conn = openConnection(baseUrl + "/health", "GET", false);
+            HttpURLConnection conn = openConnection(baseUrl + HEALTH_PATH, "GET", false);
             int status = conn.getResponseCode();
             conn.disconnect();
             return status == 200;
@@ -106,7 +107,7 @@ public class KeyorixClient {
     }
 
     private String fetchSecretValue(long secretId) throws KeyorixException {
-        String response = get("/api/v1/secrets/" + secretId + "?include_value=true");
+        String response = get(SECRETS_PATH + "/" + secretId + "?include_value=true");
         return JsonParser.parseSecretValue(response);
     }
 

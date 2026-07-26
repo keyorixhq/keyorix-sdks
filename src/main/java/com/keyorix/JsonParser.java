@@ -9,6 +9,8 @@ import java.util.List;
  */
 class JsonParser {
 
+    private JsonParser() {}
+
     /** Extract token from login response: {"data":{"token":"..."}} */
     static String parseToken(String json) {
         return extractString(json, "token");
