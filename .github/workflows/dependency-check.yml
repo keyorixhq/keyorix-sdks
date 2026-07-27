@@ -25,7 +25,12 @@ jobs:
       - name: Run OWASP Dependency Check
         env:
           NVD_API_KEY: ${{ secrets.NVD_API_KEY }}
-        run: mvn -B dependency-check:check -Dnvd.api.key=$NVD_API_KEY
+        run: |
+          if [ -n "$NVD_API_KEY" ]; then
+            mvn -B dependency-check:check -Dnvd.api.key="$NVD_API_KEY"
+          else
+            mvn -B dependency-check:check
+          fi
 
       - name: Upload report
         if: always()
