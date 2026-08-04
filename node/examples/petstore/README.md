@@ -1,6 +1,6 @@
 # Keyorix Pet Store (Node.js)
 
-Node.js example app demonstrating keyorix-node SDK in production.
+Node.js example app demonstrating the Keyorix Node.js SDK in production.
 Fetches DB password from Keyorix at startup. Zero hardcoded credentials.
 
 ## Quick start
