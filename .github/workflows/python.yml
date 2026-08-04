@@ -1,12 +1,7 @@
 name: Python
 
 on:
-  push:
-    branches: [main]
-    paths: ['python/**', '.github/workflows/python.yml']
-  pull_request:
-    branches: [main]
-    paths: ['python/**', '.github/workflows/python.yml']
+  workflow_call:
 
 permissions:
   contents: read

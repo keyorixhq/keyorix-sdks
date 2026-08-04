@@ -1,12 +1,7 @@
 name: Java
 
 on:
-  push:
-    branches: [main]
-    paths: ['java/**', '.github/workflows/java.yml']
-  pull_request:
-    branches: [main]
-    paths: ['java/**', '.github/workflows/java.yml']
+  workflow_call:
 
 permissions:
   contents: read
