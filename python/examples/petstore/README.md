@@ -1,6 +1,6 @@
 # Keyorix Pet Store (Python)
 
-Python example app demonstrating keyorix-python SDK in production.
+Python example app demonstrating the Keyorix Python SDK in production.
 Fetches DB password from Keyorix at startup. Zero hardcoded credentials.
 
 ## Quick start
