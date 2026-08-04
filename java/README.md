@@ -1,4 +1,4 @@
-# keyorix-java
+# Java SDK
 
 Java SDK for Keyorix — lightweight on-premise secrets manager.
 
@@ -11,8 +11,8 @@ Add to your `pom.xml`:
 ```xml
 <dependency>
     <groupId>com.keyorix</groupId>
-    <artifactId>keyorix-java</artifactId>
-    <version>0.1.0</version>
+    <artifactId>keyorix-sdk</artifactId>
+    <version>0.2.1</version>
 </dependency>
 ```
 
