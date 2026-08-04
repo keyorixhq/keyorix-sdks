@@ -38,8 +38,10 @@ jobs:
   # the NVD data directory (pom.xml pins it to a fixed path) on its own
   # generous timeout. This job only ever *checks against* whatever's already
   # cached (-DautoUpdate=false, never talks to NVD) so it stays fast and
-  # never blocks on network. It still runs continue-on-error, in case the
-  # cache hasn't been seeded yet and there's no local DB to check against.
+  # never blocks on network.
+  #
+  # It still runs continue-on-error, in case the cache hasn't been seeded
+  # yet and there's no local DB to check against.
   dependency-check:
     name: SCA scan
     runs-on: ubuntu-latest
@@ -64,6 +66,68 @@ jobs:
           key: dependency-check-data-restore-${{ github.run_id }}
           restore-keys: |
             dependency-check-data-
+
+      # dependency-check's own NoDataException only fires when the database
+      # is ABSENT, not when it exists but is incomplete -- confirmed from
+      # source (NvdApiDataSource.processApi(), jeremylong/DependencyCheck):
+      # the `nvd.api.last.checked` / `nvd.api.last.modified` properties are
+      # written to the database's own `properties` table only after the
+      # full NVD download-and-process loop completes without exception; a
+      # sync that fails partway through (e.g. rate-limited at 429, as
+      # happened live on 2026-08-04 at 29% downloaded) throws before ever
+      # reaching that write, leaving the property absent or stale from
+      # whatever the last *successful* sync was. So its presence and
+      # recency is a real, tool-native completeness signal -- not an
+      # invented proxy -- and a stale/absent value means exactly what it
+      # sounds like: the local database has never finished a full sync, or
+      # hasn't finished one recently. Queried directly via H2
+      # (dependency-check's own DB driver, pinned to a fixed version +
+      # checksum here since this job needs to read the file directly,
+      # independent of whatever version dependency-check-maven itself
+      # resolves) rather than through the plugin, so this check runs -- and
+      # can fail fast -- BEFORE the expensive check step below, not after.
+      - name: Assert NVD data completeness
+        working-directory: java
+        env:
+          H2_VERSION: 2.3.232
+          H2_SHA256: 8dae62d22db8982c3dcb3826edb9c727c5d302063a67eef7d63d82de401f07d3
+          # 9 days, not 7: the seed (dependency-check-update.yml) runs weekly
+          # (Mondays 03:00 UTC). 7 would fail this check on the days between
+          # a legitimate Monday run finishing a bit late and the next
+          # scheduled run; 9 gives a two-day buffer for a delayed or
+          # once-retried run without silently tolerating a seed that's been
+          # broken for a full extra week.
+          MAX_AGE_DAYS: 9
+        run: |
+          DB_FILE=$(find "$HOME/.m2/dependency-check-data" -name "odc.mv.db" 2>/dev/null | head -1)
+          if [ -z "$DB_FILE" ]; then
+            echo "::error::No OWASP dependency-check database found after cache restore. The NVD seed (dependency-check-update.yml) has never completed a successful sync -- run it (workflow_dispatch) or wait for its weekly schedule before this check can pass."
+            exit 1
+          fi
+
+          curl -sL -o /tmp/h2.jar "https://repo1.maven.org/maven2/com/h2database/h2/${H2_VERSION}/h2-${H2_VERSION}.jar"
+          echo "${H2_SHA256}  /tmp/h2.jar" | sha256sum -c -
+
+          DB_PATH="${DB_FILE%.mv.db}"
+          RESULT=$(java -cp /tmp/h2.jar org.h2.tools.Shell \
+            -url "jdbc:h2:file:${DB_PATH};ACCESS_MODE_DATA=r" \
+            -user dcuser -password 'DC-Pass1337!' \
+            -sql "SELECT \`value\` FROM properties WHERE id='nvd.api.last.checked';" 2>&1)
+          LAST_CHECKED=$(echo "$RESULT" | sed -n '2p')
+
+          if [[ -z "$LAST_CHECKED" || "$LAST_CHECKED" == "("* ]]; then
+            echo "::error::Restored dependency-check database has no nvd.api.last.checked property -- no NVD sync has ever completed successfully against it. dependency-check only writes this property after a full sync finishes without error, so a partial/failed sync (e.g. NVD rate-limiting) leaves it absent. Query output: $RESULT"
+            exit 1
+          fi
+
+          LAST_CHECKED_EPOCH=$(date -u -d "$LAST_CHECKED" +%s)
+          NOW_EPOCH=$(date -u +%s)
+          AGE_DAYS=$(( (NOW_EPOCH - LAST_CHECKED_EPOCH) / 86400 ))
+          if [ "$AGE_DAYS" -gt "$MAX_AGE_DAYS" ]; then
+            echo "::error::Restored dependency-check database was last successfully synced $AGE_DAYS day(s) ago (nvd.api.last.checked=$LAST_CHECKED), older than the ${MAX_AGE_DAYS}-day threshold. The weekly seed (dependency-check-update.yml) has been failing -- check its recent runs."
+            exit 1
+          fi
+          echo "NVD data last successfully synced $AGE_DAYS day(s) ago ($LAST_CHECKED) -- within the ${MAX_AGE_DAYS}-day threshold."
 
       - name: Run OWASP Dependency Check
         working-directory: java

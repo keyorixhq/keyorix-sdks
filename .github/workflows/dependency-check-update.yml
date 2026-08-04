@@ -49,6 +49,7 @@ jobs:
             dependency-check-data-
 
       - name: Update NVD data
+        id: update
         working-directory: java
         env:
           NVD_API_KEY: ${{ secrets.NVD_API_KEY }}
@@ -59,9 +60,17 @@ jobs:
             mvn -B dependency-check:update-only
           fi
 
+      # Deliberately NOT if: always(). A run on 2026-08-04 got rate-limited
+      # (NVD 429) 29% of the way through a full sync -- update-only above
+      # failed, but with if: always() here the partial database got saved
+      # to the cache anyway. That's worse than saving nothing: an absent
+      # database makes dependency-check fail loudly (NoDataException,
+      # verified live), but a present-and-incomplete one lets the check
+      # step run "successfully" against data missing ~70% of NVD's records,
+      # with no error at all. Only save what actually finished.
       - name: Save OWASP dependency-check data
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        if: always()
+        if: steps.update.outcome == 'success'
         with:
           path: ~/.m2/dependency-check-data
           key: dependency-check-data-${{ steps.cache-week.outputs.week }}
