@@ -10,7 +10,7 @@ permissions:
   contents: read
 
 jobs:
-  check:
+  dco:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -32,7 +32,7 @@ jobs:
           # own commits, and its diffs are machine-generated version bumps
           # with no attributable human author to certify authorship of in the
           # DCO sense — exempt it rather than block every automated
-          # dependency-update PR forever. `check` is a REQUIRED status check
+          # dependency-update PR forever. `dco` is a REQUIRED status check
           # (branch protection), so this exemption must still let the JOB
           # complete with a real success exit code, not skip the step
           # entirely — a skipped/never-run required check blocks merge
