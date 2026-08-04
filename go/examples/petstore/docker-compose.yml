@@ -27,7 +27,12 @@ services:
       retries: 10
 
   petstore:
-    build: .
+    # Context is the parent go/ module, not this directory -- see the
+    # Dockerfile's own comment for why (the replace directive in this
+    # example's go.mod needs the parent module's real source present).
+    build:
+      context: ../..
+      dockerfile: examples/petstore/Dockerfile
     ports:
       - "3001:3001"
     environment:

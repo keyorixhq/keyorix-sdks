@@ -31,6 +31,20 @@ jobs:
   # here, not copied blind — the SBOM job's `--outfile` flag in the
   # original didn't exist in the currently-pinned cyclonedx-bom version and
   # would have failed on first run; fixed to `-o` below.
+  #
+  # All four jobs below install from python/requirements-dev.lock.txt with
+  # --require-hashes: a hash-pinned lock of pyproject.toml's [dev] extra and
+  # its full transitive tree (pip-compile --generate-hashes --extra=dev),
+  # not just top-level `==` pins -- pip refuses to install anything whose
+  # downloaded artifact doesn't match a pinned hash. Regenerate after
+  # changing the dev extra:
+  #   pip-compile --extra=dev --generate-hashes \
+  #     --output-file=python/requirements-dev.lock.txt python/pyproject.toml
+  # None of these jobs need the keyorix package itself installed (bandit and
+  # detect-secrets read source files directly; pip-audit/cyclonedx-py report
+  # on the installed dev-tooling environment) so it's deliberately left out
+  # of the lock file rather than mixing a local/unhashed requirement into a
+  # --require-hashes install.
   sast:
     name: SAST (bandit)
     runs-on: ubuntu-latest
@@ -39,9 +53,10 @@ jobs:
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: '3.12'
-      - name: Install bandit
+      - name: Install dev tooling (locked)
         working-directory: python
-        run: pip install "bandit[toml]>=1.7"
+        run: |
+          pip install --no-cache-dir --only-binary :all: --require-hashes -r requirements-dev.lock.txt
       - name: Run bandit
         working-directory: python
         # continue-on-error: keyorix.py currently has 4 Medium-severity B310
@@ -62,9 +77,10 @@ jobs:
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: '3.12'
-      - name: Install dev extras
+      - name: Install dev tooling (locked)
         working-directory: python
-        run: pip install ".[dev]"
+        run: |
+          pip install --no-cache-dir --only-binary :all: --require-hashes -r requirements-dev.lock.txt
       - name: Run pip-audit
         working-directory: python
         run: pip-audit
@@ -77,9 +93,10 @@ jobs:
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: '3.12'
-      - name: Install detect-secrets
+      - name: Install dev tooling (locked)
         working-directory: python
-        run: pip install "detect-secrets>=1.5"
+        run: |
+          pip install --no-cache-dir --only-binary :all: --require-hashes -r requirements-dev.lock.txt
       - name: Scan against baseline
         working-directory: python
         run: detect-secrets scan --baseline .secrets.baseline
@@ -92,9 +109,10 @@ jobs:
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: '3.12'
-      - name: Install dev extras
+      - name: Install dev tooling (locked)
         working-directory: python
-        run: pip install ".[dev]"
+        run: |
+          pip install --no-cache-dir --only-binary :all: --require-hashes -r requirements-dev.lock.txt
       - name: Generate SBOM
         working-directory: python
         run: cyclonedx-py environment --output-format JSON -o sbom.json

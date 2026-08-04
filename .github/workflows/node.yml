@@ -22,11 +22,15 @@ jobs:
           node-version: '20'
 
       # No dependencies today (zero external deps by design, see
-      # node/README.md), but --ignore-scripts is the standing convention
-      # regardless of what's currently in package.json.
-      - name: npm install
+      # node/README.md), but npm ci (not install) against a committed
+      # package-lock.json -- even an empty one -- and --ignore-scripts are
+      # both the standing convention regardless of what's currently in
+      # package.json. npm install doesn't enforce the lockfile matches
+      # package.json and can silently resolve different versions run to
+      # run; npm ci refuses to proceed if they've drifted.
+      - name: npm ci
         working-directory: node
-        run: npm install --ignore-scripts
+        run: npm ci --ignore-scripts
 
       - name: npm test
         working-directory: node
