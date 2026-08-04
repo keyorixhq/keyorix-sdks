@@ -29,26 +29,26 @@ jobs:
 
   # Carried forward from the imported java/.github/workflows/dependency-check.yml
   # (java/.github/ is deleted after this — see the commit message for why).
+  #
+  # Without NVD_API_KEY, a *full* NVD CVE sync isn't just rate-limited, it's
+  # throttled to a crawl: confirmed live on PR #6, only 60,000/372,902
+  # records (16%) downloaded in a full 15 minutes before the job timeout
+  # killed it -- a full sync at that rate would take over an hour, so no
+  # per-PR job timeout budget can make it fit. continue-on-error can't save
+  # this either: a job-level timeout cancellation overrides it regardless of
+  # what any individual step does.
+  #
+  # So the expensive sync is split out entirely into its own scheduled
+  # workflow (dependency-check-update.yml), which owns updating and caching
+  # the NVD data directory (pom.xml pins it to a fixed path) on its own
+  # generous timeout. This job only ever *checks against* whatever's already
+  # cached (-DautoUpdate=false, never talks to NVD) so it stays fast and
+  # never blocks on network. It still runs continue-on-error, in case the
+  # cache hasn't been seeded yet and there's no local DB to check against.
   dependency-check:
     name: SCA scan
     runs-on: ubuntu-latest
-    # Without NVD_API_KEY (not yet configured for this repo -- getting one is
-    # free, https://nvd.nist.gov/developers/request-an-api-key, and would let
-    # this run unauthenticated-rate-limit-free), the OWASP plugin falls back
-    # to NVD's free/unauthenticated API for its CVE database sync, which NVD
-    # rate-limits hard enough (5 req/30s) that a full from-scratch sync
-    # reliably hits HTTP 429 and fails the whole job (confirmed live on PRs
-    # #1/#2: every run fails identically after ~14 minutes of retries).
-    # Two mitigations until the key exists:
-    #   - Cache the data directory (pom.xml pins it to a fixed path) so most
-    #     runs restore a recent DB and only need a small incremental update
-    #     instead of a full resync -- far fewer NVD requests, far less
-    #     likely to be rate-limited.
-    #   - continue-on-error on the scan step itself: a rate-limited run
-    #     still surfaces its report as an artifact but no longer blocks the
-    #     PR or forces a rerun, matching the same non-blocking pattern
-    #     already used for python.yml's bandit B310 backlog item.
-    timeout-minutes: 15
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -58,33 +58,22 @@ jobs:
           distribution: temurin
           cache: maven
 
-      - name: Compute cache week
-        id: cache-week
-        run: echo "week=$(date -u +%G-W%V)" >> "$GITHUB_OUTPUT"
-
-      - name: Cache OWASP dependency-check data
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      - name: Restore OWASP dependency-check data
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.m2/dependency-check-data
-          # Weekly key keeps the CVE data from going stale for long, but
-          # restore-keys falls back to the most recent cache of any age --
-          # so only the very first run ever (or the first run of a week
-          # with zero prior cache) pays for a full resync from NVD.
-          key: dependency-check-data-${{ steps.cache-week.outputs.week }}
+          # This job only restores, never saves (dependency-check-update.yml
+          # owns writing the cache) -- `key` is deliberately unique per run
+          # so it never exact-matches; restore-keys' prefix match is what
+          # actually picks up whatever was most recently saved there.
+          key: dependency-check-data-restore-${{ github.run_id }}
           restore-keys: |
             dependency-check-data-
 
       - name: Run OWASP Dependency Check
         working-directory: java
         continue-on-error: true
-        env:
-          NVD_API_KEY: ${{ secrets.NVD_API_KEY }}
-        run: |
-          if [ -n "$NVD_API_KEY" ]; then
-            mvn -B dependency-check:check -Dnvd.api.key="$NVD_API_KEY"
-          else
-            mvn -B dependency-check:check
-          fi
+        run: mvn -B dependency-check:check -DautoUpdate=false
 
       - name: Upload report
         if: always()

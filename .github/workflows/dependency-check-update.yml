@@ -1,0 +1,67 @@
+name: Dependency-check DB update
+
+# Owns the expensive part of OWASP dependency-check: syncing the local NVD
+# CVE database. Split out from java.yml's per-PR "SCA scan" job because a
+# full from-scratch sync without an NVD_API_KEY is throttled by NVD to a
+# crawl (confirmed live: 372,902 records at ~4,800/min == well over an hour)
+# -- no per-PR job timeout budget can accommodate that, and a job-level
+# timeout cancellation isn't something continue-on-error can work around.
+#
+# Runs weekly and on-demand, with a timeout generous enough to finish a full
+# sync even unauthenticated. Saves the resulting DB to the same cache key
+# prefix java.yml's SCA scan job restores from (restore-keys prefix match),
+# so PR-time checks stay fast and never talk to NVD directly.
+#
+# Get a free NVD_API_KEY at https://nvd.nist.gov/developers/request-an-api-key
+# and add it as a repo secret to make this ~10x faster (50 req/30s vs 5) and
+# far less likely to be rate-limited outright.
+on:
+  schedule:
+    - cron: '0 3 * * 1' # Mondays 03:00 UTC
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5.7.0
+        with:
+          java-version: 11
+          distribution: temurin
+          cache: maven
+
+      - name: Compute cache week
+        id: cache-week
+        run: echo "week=$(date -u +%G-W%V)" >> "$GITHUB_OUTPUT"
+
+      - name: Restore OWASP dependency-check data
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.m2/dependency-check-data
+          key: dependency-check-data-${{ steps.cache-week.outputs.week }}
+          restore-keys: |
+            dependency-check-data-
+
+      - name: Update NVD data
+        working-directory: java
+        env:
+          NVD_API_KEY: ${{ secrets.NVD_API_KEY }}
+        run: |
+          if [ -n "$NVD_API_KEY" ]; then
+            mvn -B dependency-check:update-only -Dnvd.api.key="$NVD_API_KEY"
+          else
+            mvn -B dependency-check:update-only
+          fi
+
+      - name: Save OWASP dependency-check data
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        if: always()
+        with:
+          path: ~/.m2/dependency-check-data
+          key: dependency-check-data-${{ steps.cache-week.outputs.week }}
