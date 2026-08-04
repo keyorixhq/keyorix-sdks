@@ -40,8 +40,26 @@ jobs:
   # cached (-DautoUpdate=false, never talks to NVD) so it stays fast and
   # never blocks on network.
   #
-  # It still runs continue-on-error, in case the cache hasn't been seeded
-  # yet and there's no local DB to check against.
+  #
+  # This job does NOT run continue-on-error. A required status check that
+  # can succeed while checking nothing is worse than no check at all -- it
+  # appears in an audit trail as a control that was never actually applied.
+  # Confirmed live (2026-08-04): with an empty/never-seeded database,
+  # `dependency-check:check -DautoUpdate=false` throws `NoDataException:
+  # Autoupdate is disabled and the database does not exist` and exits 1 --
+  # dependency-check itself already fails loudly and correctly on an
+  # absent database; continue-on-error was the only thing turning that
+  # correct failure into a job that reported "success". Failure paths,
+  # reasoned through explicitly rather than assumed:
+  #   - absent database: NoDataException above, exits 1 -- job fails.
+  #   - incomplete database (e.g. a rate-limited partial sync): does NOT
+  #     raise NoDataException (the file exists), which is exactly why
+  #     "Assert NVD data completeness" above exists and runs first -- it
+  #     fails the job before this step ever gets a chance to "succeed"
+  #     against bad data.
+  #   - real findings above the threshold: <failBuildOnCVSS>7</...> in
+  #     java/pom.xml (unrelated to this change, already correct) makes
+  #     dependency-check itself exit non-zero -- job fails.
   dependency-check:
     name: SCA scan
     runs-on: ubuntu-latest
@@ -131,7 +149,6 @@ jobs:
 
       - name: Run OWASP Dependency Check
         working-directory: java
-        continue-on-error: true
         run: mvn -B dependency-check:check -DautoUpdate=false
 
       - name: Upload report
