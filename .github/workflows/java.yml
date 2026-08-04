@@ -12,7 +12,7 @@ permissions:
   contents: read
 
 jobs:
-  build-test:
+  build-test-java:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -32,6 +32,14 @@ jobs:
   dependency-check:
     name: SCA scan
     runs-on: ubuntu-latest
+    # Without NVD_API_KEY (not yet configured for this repo), the OWASP
+    # plugin falls back to NVD's free/unauthenticated API for its CVE
+    # database sync, which NVD rate-limits aggressively enough to hang for
+    # hours rather than fail -- confirmed live: a run sat "in progress" on
+    # this exact step for over an hour with zero output before being
+    # cancelled. Fail fast instead of silently burning Actions minutes on
+    # every PR until the secret exists.
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 

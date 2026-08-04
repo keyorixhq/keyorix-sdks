@@ -1,4 +1,4 @@
-# keyorix-py
+# Python SDK
 
 Python client for Keyorix — lightweight on-premise secrets manager.
 

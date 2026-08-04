@@ -5,13 +5,13 @@
     <modelVersion>4.0.0</modelVersion>
 
     <groupId>com.keyorix</groupId>
-    <artifactId>keyorix-java</artifactId>
+    <artifactId>keyorix-sdk</artifactId>
     <version>0.2.1</version>
     <packaging>jar</packaging>
 
-    <name>keyorix-java</name>
+    <name>keyorix-sdk</name>
     <description>Java SDK for Keyorix — lightweight on-premise secrets manager</description>
-    <url>https://github.com/keyorixhq/keyorix-java</url>
+    <url>https://github.com/keyorixhq/keyorix-sdks/tree/main/java</url>
 
     <licenses>
         <license>
@@ -34,7 +34,7 @@
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <junit.version>5.14.4</junit.version>
         <sonar.organization>keyorixhq</sonar.organization>
-        <sonar.projectKey>keyorixhq_keyorix-java</sonar.projectKey>
+        <sonar.projectKey>keyorixhq_keyorix-sdks</sonar.projectKey>
         <sonar.host.url>https://sonarcloud.io</sonar.host.url>
         <sonar.coverage.jacoco.xmlReportPaths>${project.build.directory}/site/jacoco/jacoco.xml</sonar.coverage.jacoco.xmlReportPaths>
     </properties>
