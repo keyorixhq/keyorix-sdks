@@ -7,6 +7,13 @@ go/*.test
 go/*.out
 go/coverage/
 
+# go/examples/petstore/petstore — `go build`'s default output binary in a
+# `package main` directory (no -o given). The original keyorix-go repo
+# accidentally committed this; it was purged from history during import
+# (ADR-072), and a plain `go build ./...` regenerates it locally on every
+# build, so it needs its own explicit rule rather than relying on go/*.out.
+go/examples/petstore/petstore
+
 # node/ (from keyorix-node/.gitignore)
 node/node_modules/
 node/*.log

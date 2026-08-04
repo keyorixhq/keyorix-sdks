@@ -8,7 +8,7 @@ import (
 	"os"
 	"testing"
 
-	keyorix "github.com/keyorixhq/keyorix-go"
+	keyorix "github.com/keyorixhq/keyorix-sdks/go"
 )
 
 func TestIntegration_Login(t *testing.T) {

@@ -26,7 +26,7 @@ import (
 	"strconv"
 	"time"
 
-	keyorix "github.com/keyorixhq/keyorix-go"
+	keyorix "github.com/keyorixhq/keyorix-sdks/go"
 	_ "github.com/lib/pq" // registers the postgres driver with database/sql
 )
 

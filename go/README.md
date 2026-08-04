@@ -1,11 +1,11 @@
-# keyorix-go
+# Go SDK
 
 Official Go SDK for [Keyorix](https://keyorix.com) — lightweight on-premise secrets manager.
 
 ## Install
 
 ```bash
-go get github.com/keyorixhq/keyorix-go
+go get github.com/keyorixhq/keyorix-sdks/go
 ```
 
 ## Quick start
@@ -18,7 +18,7 @@ import (
     "fmt"
     "log"
 
-    keyorix "github.com/keyorixhq/keyorix-go"
+    keyorix "github.com/keyorixhq/keyorix-sdks/go"
 )
 
 func main() {
