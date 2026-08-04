@@ -47,4 +47,4 @@ Python 3.8+, zero external dependencies, Keyorix server v0.1.0+
 
 ## License
 
-AGPL-3.0
+Apache-2.0 — see the [repository root LICENSE](../LICENSE)
