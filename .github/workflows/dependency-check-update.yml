@@ -12,9 +12,16 @@ name: Dependency-check DB update
 # prefix java.yml's SCA scan job restores from (restore-keys prefix match),
 # so PR-time checks stay fast and never talk to NVD directly.
 #
-# Get a free NVD_API_KEY at https://nvd.nist.gov/developers/request-an-api-key
-# and add it as a repo secret to make this ~10x faster (50 req/30s vs 5) and
-# far less likely to be rate-limited outright.
+# NVD_API_KEY is REQUIRED, not a nice-to-have: unauthenticated NVD allows
+# ~5 requests/30s against authenticated's ~50/30s, and this sync needs to
+# page through 372,917+ records -- structurally, not just occasionally,
+# too slow to finish unauthenticated before hitting NVD's own rate limit
+# (confirmed live, twice: 16% and 29% downloaded before a 429 on two
+# separate unauthenticated runs). The "Update NVD data" step below fails
+# outright if the secret is absent, rather than silently falling back to
+# unauthenticated and re-hitting the same 429 forty-five minutes later.
+# Get a free key at https://nvd.nist.gov/developers/request-an-api-key and
+# add it as a repo secret named NVD_API_KEY.
 on:
   schedule:
     - cron: '0 3 * * 1' # Mondays 03:00 UTC
@@ -49,19 +56,28 @@ jobs:
             dependency-check-data-
 
       - name: Update NVD data
+        id: update
         working-directory: java
         env:
           NVD_API_KEY: ${{ secrets.NVD_API_KEY }}
         run: |
-          if [ -n "$NVD_API_KEY" ]; then
-            mvn -B dependency-check:update-only -Dnvd.api.key="$NVD_API_KEY"
-          else
-            mvn -B dependency-check:update-only
+          if [ -z "$NVD_API_KEY" ]; then
+            echo "::error::NVD_API_KEY secret is not set. Unauthenticated NVD access is rate-limited too hard to complete this sync (confirmed live: two separate runs hit a 429 after 16% and 29% downloaded) -- get a free key at https://nvd.nist.gov/developers/request-an-api-key and add it as a repo secret named NVD_API_KEY, rather than letting this fall back to unauthenticated and fail the same way again."
+            exit 1
           fi
+          mvn -B dependency-check:update-only -Dnvd.api.key="$NVD_API_KEY"
 
+      # Deliberately NOT if: always(). A run on 2026-08-04 got rate-limited
+      # (NVD 429) 29% of the way through a full sync -- update-only above
+      # failed, but with if: always() here the partial database got saved
+      # to the cache anyway. That's worse than saving nothing: an absent
+      # database makes dependency-check fail loudly (NoDataException,
+      # verified live), but a present-and-incomplete one lets the check
+      # step run "successfully" against data missing ~70% of NVD's records,
+      # with no error at all. Only save what actually finished.
       - name: Save OWASP dependency-check data
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        if: always()
+        if: steps.update.outcome == 'success'
         with:
           path: ~/.m2/dependency-check-data
           key: dependency-check-data-${{ steps.cache-week.outputs.week }}
