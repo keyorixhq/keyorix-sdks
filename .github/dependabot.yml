@@ -24,6 +24,17 @@ updates:
     directory: "/python"
     schedule:
       interval: weekly
+    # chardet is only a transitive dependency (pulled in via cyclonedx-bom,
+    # not pinned directly in pyproject.toml). cyclonedx-bom==7.3.1 requires
+    # chardet<6.0, so any >=6 bump is unresolvable and fails the
+    # --require-hashes install in CI (see PR #7). Checked PyPI 2026-08-04:
+    # 7.3.1 is still cyclonedx-bom's latest release and still pins
+    # chardet<6.0 -- this isn't fixed upstream yet. Remove this rule once
+    # cyclonedx-bom relaxes that pin to allow chardet>=6; the actual fix
+    # when that happens is bumping cyclonedx-bom, not chardet directly.
+    ignore:
+      - dependency-name: "chardet"
+        versions: [">=6"]
 
   # Carried forward from the imported java/.github/dependabot.yml, path
   # updated for the monorepo layout. The junit-jupiter ignore rule predates
