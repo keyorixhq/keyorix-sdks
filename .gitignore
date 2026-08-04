@@ -1,0 +1,25 @@
+# General
+.claude/
+.scratch/
+
+# go/ (from keyorix-go/.gitignore)
+go/*.test
+go/*.out
+go/coverage/
+
+# node/ (from keyorix-node/.gitignore)
+node/node_modules/
+node/*.log
+
+# python/ (from keyorix-python/.gitignore)
+python/__pycache__/
+python/*.pyc
+python/*.egg-info/
+python/dist/
+python/build/
+python/.pytest_cache/
+
+# java/ (from keyorix-java/.gitignore)
+java/target/
+java/*.class
+java/*.jar
