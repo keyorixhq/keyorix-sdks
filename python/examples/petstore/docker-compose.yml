@@ -14,7 +14,12 @@ services:
       retries: 10
 
   petstore:
-    build: .
+    # Context is the parent python/ SDK directory, not this directory --
+    # see the Dockerfile's own comment for why (keyorix.py lives one level
+    # up from examples/petstore/).
+    build:
+      context: ../..
+      dockerfile: examples/petstore/Dockerfile
     ports:
       - "3002:3002"
     environment:
