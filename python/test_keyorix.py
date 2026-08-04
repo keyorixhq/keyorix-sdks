@@ -1,4 +1,5 @@
 """Unit tests for keyorix Python SDK."""
+# gate negative-case throwaway change: python/-only, no .github/** touched
 
 import unittest
 from unittest.mock import patch, MagicMock
