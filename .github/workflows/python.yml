@@ -1,0 +1,105 @@
+name: Python
+
+on:
+  push:
+    branches: [main]
+    paths: ['python/**', '.github/workflows/python.yml']
+  pull_request:
+    branches: [main]
+    paths: ['python/**', '.github/workflows/python.yml']
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.12'
+
+      - name: Run tests
+        working-directory: python
+        run: python -m unittest test_keyorix.py -v
+
+  # Carried forward from keyorix-python's uncommitted ssdlc.yml (never
+  # merged there; adopted here since it's genuinely useful, ADR-072). Each
+  # job verified locally against this exact command before being wired in
+  # here, not copied blind — the SBOM job's `--outfile` flag in the
+  # original didn't exist in the currently-pinned cyclonedx-bom version and
+  # would have failed on first run; fixed to `-o` below.
+  sast:
+    name: SAST (bandit)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.12'
+      - name: Install bandit
+        working-directory: python
+        run: pip install "bandit[toml]>=1.7"
+      - name: Run bandit
+        working-directory: python
+        # continue-on-error: keyorix.py currently has 4 Medium-severity B310
+        # findings (urllib.request.urlopen without scheme restriction on the
+        # caller-supplied server_url) -- a real, pre-existing finding, not a
+        # bandit false positive, but fixing it is an SDK code change and
+        # explicitly out of scope for ADR-072's consolidation. Surfaced every
+        # run rather than silently dropped or silently fixed; not blocking
+        # merges until there's an explicit decision to fix or suppress it.
+        continue-on-error: true
+        run: bandit -c pyproject.toml -r keyorix.py
+
+  dependency-audit:
+    name: Dependency audit (pip-audit)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.12'
+      - name: Install dev extras
+        working-directory: python
+        run: pip install ".[dev]"
+      - name: Run pip-audit
+        working-directory: python
+        run: pip-audit
+
+  secret-scan:
+    name: Secret scan (detect-secrets)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.12'
+      - name: Install detect-secrets
+        working-directory: python
+        run: pip install "detect-secrets>=1.5"
+      - name: Scan against baseline
+        working-directory: python
+        run: detect-secrets scan --baseline .secrets.baseline
+
+  sbom:
+    name: SBOM (CycloneDX)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.12'
+      - name: Install dev extras
+        working-directory: python
+        run: pip install ".[dev]"
+      - name: Generate SBOM
+        working-directory: python
+        run: cyclonedx-py environment --output-format JSON -o sbom.json
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: python-sbom
+          path: python/sbom.json
+          retention-days: 30

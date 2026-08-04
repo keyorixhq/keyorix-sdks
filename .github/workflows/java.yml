@@ -1,0 +1,88 @@
+name: Java
+
+on:
+  push:
+    branches: [main]
+    paths: ['java/**', '.github/workflows/java.yml']
+  pull_request:
+    branches: [main]
+    paths: ['java/**', '.github/workflows/java.yml']
+
+permissions:
+  contents: read
+
+jobs:
+  build-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5.7.0
+        with:
+          java-version: 11
+          distribution: temurin
+          cache: maven
+
+      - name: mvn test
+        working-directory: java
+        run: mvn -B test
+
+  # Carried forward from the imported java/.github/workflows/dependency-check.yml
+  # (java/.github/ is deleted after this — see the commit message for why).
+  dependency-check:
+    name: SCA scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5.7.0
+        with:
+          java-version: 11
+          distribution: temurin
+          cache: maven
+
+      - name: Run OWASP Dependency Check
+        working-directory: java
+        env:
+          NVD_API_KEY: ${{ secrets.NVD_API_KEY }}
+        run: |
+          if [ -n "$NVD_API_KEY" ]; then
+            mvn -B dependency-check:check -Dnvd.api.key="$NVD_API_KEY"
+          else
+            mvn -B dependency-check:check
+          fi
+
+      - name: Upload report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: dependency-check-report
+          path: java/target/dependency-check-report.html
+          retention-days: 30
+
+  # Carried forward from java/.github/workflows/sonar.yml. JDK 17 here (not
+  # 11, matching build-test above) because the SonarCloud Maven plugin
+  # itself requires class-file version 61+ (JDK 17) to run, independent of
+  # the project's own compile target (maven.compiler.target=11) -- this was
+  # already true in the source repo (see its own "bump sonar workflow to
+  # Java 17" commit), carried forward faithfully rather than "simplified"
+  # back to one shared JDK version.
+  sonar:
+    name: Analyze
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5.7.0
+        with:
+          java-version: 17
+          distribution: temurin
+          cache: maven
+
+      - name: Build and analyze
+        working-directory: java
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+        run: mvn -B verify sonar:sonar

@@ -26,5 +26,18 @@ classifiers = [
 
 [project.urls]
 Homepage = "https://keyorix.com"
-Repository = "https://github.com/keyorixhq/keyorix-py"
-Issues = "https://github.com/keyorixhq/keyorix-py/issues"
+Repository = "https://github.com/keyorixhq/keyorix-sdks/tree/main/python"
+Issues = "https://github.com/keyorixhq/keyorix-sdks/issues"
+
+[project.optional-dependencies]
+dev = [
+    "bandit[toml]>=1.7",
+    "pip-audit>=2.7",
+    "detect-secrets>=1.5",
+    "pre-commit>=3.8",
+    "cyclonedx-bom>=4.0",
+]
+
+[tool.bandit]
+targets = ["keyorix.py"]
+skips = []

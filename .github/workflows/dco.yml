@@ -1,0 +1,89 @@
+name: DCO
+
+on:
+  pull_request:
+    branches: [main]
+
+# Read-only: this job only inspects commit metadata already in the PR, it
+# never needs to write anything.
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # A generous fixed depth, not fetch-depth: 0 (fetches every other
+          # branch too) and not an arithmetic expression (GitHub Actions
+          # doesn't support those in ${{ }} — see keyorix's own dco.yml for
+          # the incident this comment preserves). Comfortably covers this
+          # repo's real PR sizes.
+          fetch-depth: 100
+
+      # Self-contained check (no third-party Action/GitHub App), matching
+      # keyorix's own dco.yml. Verifies every non-merge commit in the PR
+      # carries a `Signed-off-by:` trailer whose email matches that commit's
+      # own author email (DCO 1.1, https://developercertificate.org/).
+      - name: Check DCO sign-off
+        env:
+          # Dependabot has no mechanism to add a Signed-off-by trailer to its
+          # own commits, and its diffs are machine-generated version bumps
+          # with no attributable human author to certify authorship of in the
+          # DCO sense — exempt it rather than block every automated
+          # dependency-update PR forever. `check` is a REQUIRED status check
+          # (branch protection), so this exemption must still let the JOB
+          # complete with a real success exit code, not skip the step
+          # entirely — a skipped/never-run required check blocks merge
+          # exactly as much as a failed one ("Expected — waiting for status").
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+        run: |
+          case "$PR_AUTHOR" in
+            'dependabot[bot]'|'app/dependabot')
+              echo "Skipping DCO check for automated dependency-update PR from $PR_AUTHOR."
+              exit 0
+              ;;
+          esac
+
+          base="${{ github.event.pull_request.base.sha }}"
+          head="${{ github.event.pull_request.head.sha }}"
+          fail=0
+          for sha in $(git rev-list --no-merges "$base..$head"); do
+            author_email="$(git log -1 --format=%ae "$sha")"
+            # Skip commits authored by bots (e.g. dependabot, renovate) — they
+            # have no mechanism to add a Signed-off-by trailer themselves.
+            case "$author_email" in
+              *'[bot]@users.noreply.github.com')
+                echo "Skipping bot-authored commit $sha ($author_email)."
+                continue
+                ;;
+            esac
+            msg="$(git log -1 --format=%B "$sha")"
+            found=0
+            while IFS= read -r line; do
+              case "$line" in
+                "Signed-off-by:"*)
+                  email="$(printf '%s' "$line" | sed -n 's/.*<\(.*\)>.*/\1/p')"
+                  email_lc="$(printf '%s' "$email" | tr '[:upper:]' '[:lower:]')"
+                  author_lc="$(printf '%s' "$author_email" | tr '[:upper:]' '[:lower:]')"
+                  if [ "$email_lc" = "$author_lc" ]; then
+                    found=1
+                  fi
+                  ;;
+              esac
+            done <<EOF
+          $msg
+          EOF
+            if [ "$found" -eq 0 ]; then
+              echo "::error::Commit $sha ($author_email) has no matching Signed-off-by trailer."
+              fail=1
+            fi
+          done
+          if [ "$fail" -ne 0 ]; then
+            echo ""
+            echo "Every commit needs a Signed-off-by trailer matching its author email (DCO, https://developercertificate.org/) — see CONTRIBUTING.md."
+            echo "Fix a single commit:   git commit --amend -s --no-edit"
+            echo "Fix multiple commits:  git rebase --exec 'git commit --amend --no-edit -s' <base-branch>"
+            exit 1
+          fi

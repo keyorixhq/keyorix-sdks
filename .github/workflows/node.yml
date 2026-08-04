@@ -1,0 +1,46 @@
+name: Node.js
+
+on:
+  push:
+    branches: [main]
+    paths: ['node/**', '.github/workflows/node.yml']
+  pull_request:
+    branches: [main]
+    paths: ['node/**', '.github/workflows/node.yml']
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '20'
+
+      # No dependencies today (zero external deps by design, see
+      # node/README.md), but --ignore-scripts is the standing convention
+      # regardless of what's currently in package.json.
+      - name: npm install
+        working-directory: node
+        run: npm install --ignore-scripts
+
+      - name: npm test
+        working-directory: node
+        run: npm test
+
+      # examples/petstore has its own package.json/package-lock.json (pg as
+      # a real dependency) and resolves the SDK itself via a Docker-time
+      # copy into node_modules (see its Dockerfile) rather than a normal npm
+      # dependency, so it can't be executed here the same way — just verify
+      # it installs cleanly and the source parses.
+      - name: npm ci (petstore example)
+        working-directory: node/examples/petstore
+        run: npm ci --ignore-scripts
+
+      - name: syntax check (petstore example)
+        working-directory: node/examples/petstore
+        run: node --check main.js

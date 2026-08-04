@@ -1,0 +1,42 @@
+name: Go
+
+on:
+  push:
+    branches: [main]
+    paths: ['go/**', '.github/workflows/go.yml']
+  pull_request:
+    branches: [main]
+    paths: ['go/**', '.github/workflows/go.yml']
+
+permissions:
+  contents: read
+
+jobs:
+  build-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go/go.mod
+
+      - name: go vet
+        working-directory: go
+        run: go vet ./...
+
+      - name: go build
+        working-directory: go
+        run: go build ./...
+
+      - name: go test
+        working-directory: go
+        run: go test -race ./...
+
+      # examples/petstore is its own module (replace-directed to the parent,
+      # see its go.mod) so it isn't covered by `go build ./...` above —
+      # build it separately as a real-world consumer smoke test: if a change
+      # here breaks the SDK's public API, this is what catches it.
+      - name: go build (petstore example)
+        working-directory: go/examples/petstore
+        run: go build ./...

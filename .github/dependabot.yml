@@ -1,0 +1,46 @@
+version: 2
+updates:
+  - package-ecosystem: gomod
+    directory: "/go"
+    schedule:
+      interval: weekly
+
+  - package-ecosystem: gomod
+    directory: "/go/examples/petstore"
+    schedule:
+      interval: weekly
+
+  - package-ecosystem: npm
+    directory: "/node"
+    schedule:
+      interval: weekly
+
+  - package-ecosystem: npm
+    directory: "/node/examples/petstore"
+    schedule:
+      interval: weekly
+
+  - package-ecosystem: pip
+    directory: "/python"
+    schedule:
+      interval: weekly
+
+  # Carried forward from the imported java/.github/dependabot.yml, path
+  # updated for the monorepo layout. The junit-jupiter ignore rule predates
+  # this consolidation: JUnit 6 has breaking API changes the source repo
+  # explicitly reverted from (see its "revert JUnit to 5.x" commit,
+  # imported in full via git subtree) -- carried forward so Dependabot
+  # doesn't immediately re-propose the same reverted bump.
+  - package-ecosystem: maven
+    directory: "/java"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 10
+    ignore:
+      - dependency-name: "org.junit.jupiter:junit-jupiter"
+        versions: [">=6"]
+
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
