@@ -12,12 +12,7 @@ on:
   push:
     branches: [main]
   pull_request:
-    # TEMPORARY, will be reverted before this PR ships: adds
-    # ci/aggregating-gate as a target so the throwaway negative-case PR
-    # (base=ci/aggregating-gate, python-only diff) can actually trigger
-    # this workflow to observe skip behavior without merging into main
-    # first. See PR #11.
-    branches: [main, ci/aggregating-gate]
+    branches: [main]
 
 permissions:
   contents: read
