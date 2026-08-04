@@ -99,4 +99,4 @@ client := keyorix.New(server, token)
 
 ## License
 
-AGPL-3.0 — see [LICENSE](LICENSE)
+Apache-2.0 — see the [repository root LICENSE](../LICENSE)
