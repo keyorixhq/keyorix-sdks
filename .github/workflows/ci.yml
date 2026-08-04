@@ -1,0 +1,181 @@
+name: CI
+
+# Sole PR/push entry point for go.yml, java.yml, node.yml, python.yml, dco.yml
+# -- those five are now workflow_call-only (no push/pull_request triggers of
+# their own), so this is the only place "should X run for this change"
+# gets decided. Keeping that decision in one job (`changes`) means the gate
+# below can validate against the exact same outputs that gated each job,
+# instead of re-deriving its own copy of the same logic (the drift between
+# two independent copies of "which paths mean what" is what made the
+# previous 11-required-context setup impossible to keep in sync).
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  changes:
+    name: Detect changed languages
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: read
+    outputs:
+      go: ${{ github.event_name == 'push' || steps.filter.outputs.go == 'true' }}
+      java: ${{ github.event_name == 'push' || steps.filter.outputs.java == 'true' }}
+      node: ${{ github.event_name == 'push' || steps.filter.outputs.node == 'true' }}
+      python: ${{ github.event_name == 'push' || steps.filter.outputs.python == 'true' }}
+    steps:
+      # push-to-main has no reliable diff base: github.event.before isn't a
+      # safe merge-base for a squash-merged or force-pushed history, and
+      # main only changes via approved PR merges anyway -- so every language
+      # just runs unconditionally on push, as a cheap post-merge safety net,
+      # rather than trusting a push-event diff. The filter step below only
+      # needs to run for pull_request; its outputs are unused on push
+      # (short-circuited by the `github.event_name == 'push' ||` above).
+      - id: filter
+        if: github.event_name == 'pull_request'
+        # Reads changed files via the REST API (needs pull-requests: read
+        # above) -- no checkout required for pull_request events.
+        uses: dorny/paths-filter@7b450fff21473bca461d4b92ce414b9d0420d706 # v4.0.2
+        with:
+          filters: |
+            shared: &shared
+              - '.github/**'
+            go:
+              - *shared
+              - 'go/**'
+            java:
+              - *shared
+              - 'java/**'
+            node:
+              - *shared
+              - 'node/**'
+            python:
+              - *shared
+              - 'python/**'
+
+  go:
+    name: Go
+    needs: changes
+    if: needs.changes.outputs.go == 'true'
+    uses: ./.github/workflows/go.yml
+    secrets: inherit
+
+  java:
+    name: Java
+    needs: changes
+    if: needs.changes.outputs.java == 'true'
+    uses: ./.github/workflows/java.yml
+    # Only java.yml's `sonar` job currently consumes a secret (SONAR_TOKEN),
+    # but this is applied uniformly across every callee below so a secret
+    # added to any of them later doesn't silently break for lack of
+    # `secrets: inherit` here.
+    secrets: inherit
+
+  node:
+    name: Node.js
+    needs: changes
+    if: needs.changes.outputs.node == 'true'
+    uses: ./.github/workflows/node.yml
+    secrets: inherit
+
+  python:
+    name: Python
+    needs: changes
+    if: needs.changes.outputs.python == 'true'
+    uses: ./.github/workflows/python.yml
+    secrets: inherit
+
+  dco:
+    name: DCO
+    # Unconditional on pull_request (matches dco.yml's original behavior --
+    # it never ran on push), independent of `changes`: DCO sign-off has
+    # nothing to do with which language directories were touched.
+    if: github.event_name == 'pull_request'
+    uses: ./.github/workflows/dco.yml
+    secrets: inherit
+    with:
+      # A called workflow's own github.event is the workflow_call event, not
+      # the caller's pull_request payload -- dco.yml can't read
+      # github.event.pull_request.* itself, so the caller passes it through.
+      pr_author: ${{ github.event.pull_request.user.login }}
+      base_sha: ${{ github.event.pull_request.base.sha }}
+      head_sha: ${{ github.event.pull_request.head.sha }}
+
+  gate:
+    name: Gate
+    needs: [changes, go, java, node, python, dco]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Evaluate required checks
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          CHANGES_RESULT: ${{ needs.changes.result }}
+          GO_EXPECTED: ${{ needs.changes.outputs.go }}
+          GO_RESULT: ${{ needs.go.result }}
+          JAVA_EXPECTED: ${{ needs.changes.outputs.java }}
+          JAVA_RESULT: ${{ needs.java.result }}
+          NODE_EXPECTED: ${{ needs.changes.outputs.node }}
+          NODE_RESULT: ${{ needs.node.result }}
+          PYTHON_EXPECTED: ${{ needs.changes.outputs.python }}
+          PYTHON_RESULT: ${{ needs.python.result }}
+          DCO_RESULT: ${{ needs.dco.result }}
+        run: |
+          fail=0
+
+          # First assertion, before anything else: if `changes` itself
+          # didn't succeed, every language job's `if: needs.changes.outputs.X
+          # == 'true'` reads as false (a failed job produces no outputs), so
+          # every one of them "legitimately" skips. Evaluating the per-
+          # language checks below in that state would read a broken filter
+          # as an all-clear across the board -- a universal bypass dressed
+          # up as an empty diff. Fail closed before that logic ever runs.
+          if [ "$CHANGES_RESULT" != "success" ]; then
+            echo "::error::changes job did not succeed (result=$CHANGES_RESULT) -- cannot trust any downstream skip as legitimate. Failing closed."
+            exit 1
+          fi
+
+          check() {
+            job_name="$1"; expected="$2"; result="$3"
+            if [ "$expected" = "true" ]; then
+              if [ "$result" != "success" ]; then
+                echo "::error::$job_name was in scope for this change but result=$result"
+                fail=1
+              fi
+            else
+              if [ "$result" != "skipped" ]; then
+                echo "::error::$job_name was expected to be out of scope (skipped) but result=$result"
+                fail=1
+              fi
+            fi
+          }
+
+          check "go"     "$GO_EXPECTED"     "$GO_RESULT"
+          check "java"   "$JAVA_EXPECTED"   "$JAVA_RESULT"
+          check "node"   "$NODE_EXPECTED"   "$NODE_RESULT"
+          check "python" "$PYTHON_EXPECTED" "$PYTHON_RESULT"
+
+          # dco only runs on pull_request (see the job's `if:` above) --
+          # there's no PR commit range to check DCO sign-off against on a
+          # push to main.
+          if [ "$EVENT_NAME" = "pull_request" ]; then
+            if [ "$DCO_RESULT" != "success" ]; then
+              echo "::error::dco was expected to run on a pull_request event but result=$DCO_RESULT"
+              fail=1
+            fi
+          else
+            if [ "$DCO_RESULT" != "skipped" ]; then
+              echo "::error::dco was expected to be skipped on a $EVENT_NAME event but result=$DCO_RESULT"
+              fail=1
+            fi
+          fi
+
+          if [ "$fail" -ne 0 ]; then
+            exit 1
+          fi
+          echo "All required checks passed or were legitimately out of scope."

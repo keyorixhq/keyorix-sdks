@@ -1,12 +1,7 @@
 name: Node.js
 
 on:
-  push:
-    branches: [main]
-    paths: ['node/**', '.github/workflows/node.yml']
-  pull_request:
-    branches: [main]
-    paths: ['node/**', '.github/workflows/node.yml']
+  workflow_call:
 
 permissions:
   contents: read

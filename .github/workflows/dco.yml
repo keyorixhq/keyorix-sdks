@@ -1,8 +1,21 @@
 name: DCO
 
 on:
-  pull_request:
-    branches: [main]
+  workflow_call:
+    # A called workflow's own github.event/github.event_name reflect the
+    # workflow_call event, not the caller's original pull_request payload —
+    # github.event.pull_request.* is empty here regardless of what triggered
+    # the caller. The caller must pass what this check needs explicitly.
+    inputs:
+      pr_author:
+        required: true
+        type: string
+      base_sha:
+        required: true
+        type: string
+      head_sha:
+        required: true
+        type: string
 
 # Read-only: this job only inspects commit metadata already in the PR, it
 # never needs to write anything.
@@ -37,7 +50,7 @@ jobs:
           # complete with a real success exit code, not skip the step
           # entirely — a skipped/never-run required check blocks merge
           # exactly as much as a failed one ("Expected — waiting for status").
-          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+          PR_AUTHOR: ${{ inputs.pr_author }}
         run: |
           case "$PR_AUTHOR" in
             'dependabot[bot]'|'app/dependabot')
@@ -46,8 +59,8 @@ jobs:
               ;;
           esac
 
-          base="${{ github.event.pull_request.base.sha }}"
-          head="${{ github.event.pull_request.head.sha }}"
+          base="${{ inputs.base_sha }}"
+          head="${{ inputs.head_sha }}"
           fail=0
           for sha in $(git rev-list --no-merges "$base..$head"); do
             author_email="$(git log -1 --format=%ae "$sha")"
