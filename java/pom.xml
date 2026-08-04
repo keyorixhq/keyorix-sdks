@@ -94,6 +94,10 @@
                 <configuration>
                     <failBuildOnCVSS>7</failBuildOnCVSS>
                     <formats>HTML</formats>
+                    <!-- Fixed, known path so CI can cache the NVD data
+                         directory across runs (see java.yml) instead of
+                         re-downloading the full CVE database on every PR. -->
+                    <dataDirectory>${user.home}/.m2/dependency-check-data</dataDirectory>
                 </configuration>
             </plugin>
             <plugin>
