@@ -1,4 +1,4 @@
-# keyorix-node
+# Node.js SDK
 
 Node.js SDK for Keyorix — lightweight on-premise secrets manager.
 
@@ -6,11 +6,11 @@ Zero external dependencies. Uses Node.js built-in http/https modules.
 
 ## Install
 
-    npm install keyorix
+    npm install @keyorixhq/sdk
 
 ## Quick start
 
-    const keyorix = require('keyorix');
+    const keyorix = require('@keyorixhq/sdk');
 
     const token = await keyorix.login('http://your-server:8080', 'admin', 'password');
     const client = new keyorix.Client('http://your-server:8080', token);

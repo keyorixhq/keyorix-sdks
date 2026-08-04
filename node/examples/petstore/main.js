@@ -16,7 +16,7 @@
  */
 
 const http = require('node:http');
-const { Client } = require('keyorix');
+const { Client } = require('@keyorixhq/sdk');
 const { Pool } = require('pg');
 
 let pool;

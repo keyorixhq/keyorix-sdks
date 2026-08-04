@@ -1,5 +1,5 @@
 {
-  "name": "keyorix",
+  "name": "@keyorixhq/sdk",
   "version": "0.2.1",
   "description": "Node.js SDK for Keyorix — lightweight on-premise secrets manager",
   "main": "keyorix.js",
@@ -12,10 +12,15 @@
   "license": "Apache-2.0",
   "repository": {
     "type": "git",
-    "url": "https://github.com/keyorixhq/keyorix-node.git"
+    "url": "https://github.com/keyorixhq/keyorix-sdks.git",
+    "directory": "node"
   },
   "homepage": "https://keyorix.com",
   "engines": {
     "node": ">=18"
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
   }
 }
