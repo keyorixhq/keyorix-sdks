@@ -12,8 +12,8 @@ Zero dependencies — stdlib only. Or just copy keyorix.py into your project.
 
     import keyorix
 
-    token = keyorix.login("http://your-server:8080", "admin", "password")
-    client = keyorix.Client("http://your-server:8080", token)
+    token = keyorix.login("https://your-server:8443", "admin", "password")
+    client = keyorix.Client("https://your-server:8443", token)
 
     db_password = client.get_secret("db-password", "production")
 
