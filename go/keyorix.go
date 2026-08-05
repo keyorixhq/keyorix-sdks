@@ -57,6 +57,21 @@ type SecretValue struct {
 	Value string `json:"value"`
 }
 
+// APIError represents a non-2xx response from the Keyorix server. Error()
+// deliberately omits the raw response body: it's server-controlled content
+// that this SDK's own README quick-start passes straight to log.Fatal(err),
+// and an unconditional relay into that path is exactly how untrusted content
+// ends up verbatim in application logs. Callers who need the body for their
+// own (redacted) logging can read the Body field directly.
+type APIError struct {
+	StatusCode int
+	Body       string
+}
+
+func (e *APIError) Error() string {
+	return fmt.Sprintf("keyorix: server returned %d", e.StatusCode)
+}
+
 // Option configures the client.
 type Option func(*Client)
 
@@ -109,7 +124,7 @@ func Login(ctx context.Context, serverURL, username, password string) (string, e
 
 	respBody, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("keyorix: login failed (HTTP %d): %s", resp.StatusCode, string(respBody))
+		return "", &APIError{StatusCode: resp.StatusCode, Body: string(respBody)}
 	}
 
 	var result struct {
@@ -170,7 +185,7 @@ func (c *Client) ListSecrets(ctx context.Context, environment string) ([]Secret,
 	}
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("keyorix: server returned %d: %s", resp.StatusCode, string(body))
+		return nil, &APIError{StatusCode: resp.StatusCode, Body: string(body)}
 	}
 
 	var result struct {
@@ -203,7 +218,7 @@ func (c *Client) getSecretValue(ctx context.Context, secretID uint) (string, err
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
-		return "", fmt.Errorf("keyorix: server returned %d: %s", resp.StatusCode, string(body))
+		return "", &APIError{StatusCode: resp.StatusCode, Body: string(body)}
 	}
 
 	var result struct {
@@ -253,7 +268,7 @@ func (c *Client) ListProjects(ctx context.Context) ([]Project, error) {
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("keyorix: server returned %d: %s", resp.StatusCode, string(body))
+		return nil, &APIError{StatusCode: resp.StatusCode, Body: string(body)}
 	}
 
 	var result struct {
@@ -285,7 +300,7 @@ func (c *Client) CreateProject(ctx context.Context, name, description string) (*
 
 	if resp.StatusCode != http.StatusCreated && resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("keyorix: server returned %d: %s", resp.StatusCode, string(body))
+		return nil, &APIError{StatusCode: resp.StatusCode, Body: string(body)}
 	}
 
 	var result struct {
@@ -314,7 +329,7 @@ func (c *Client) ListEnvironments(ctx context.Context, projectID uint) ([]Enviro
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("keyorix: server returned %d: %s", resp.StatusCode, string(body))
+		return nil, &APIError{StatusCode: resp.StatusCode, Body: string(body)}
 	}
 
 	var result struct {
