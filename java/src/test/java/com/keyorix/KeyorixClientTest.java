@@ -6,16 +6,40 @@ import static org.junit.jupiter.api.Assertions.*;
 class KeyorixClientTest {
 
     @Test
-    void testClientConstruction() {
+    void testClientConstruction() throws KeyorixException {
         KeyorixClient client = new KeyorixClient("http://localhost:8080", "test-token");
         assertNotNull(client);
     }
 
     @Test
-    void testClientStripsTrailingSlash() {
+    void testClientStripsTrailingSlash() throws KeyorixException {
         // Just verify construction doesn't throw
         KeyorixClient client = new KeyorixClient("http://localhost:8080/", "test-token");
         assertNotNull(client);
+    }
+
+    @Test
+    void testClientAllowsHttps() throws KeyorixException {
+        KeyorixClient client = new KeyorixClient("https://example.com:8443", "test-token");
+        assertNotNull(client);
+    }
+
+    @Test
+    void testClientAllowsLoopbackHttp() throws KeyorixException {
+        assertNotNull(new KeyorixClient("http://localhost:8080", "test-token"));
+        assertNotNull(new KeyorixClient("http://127.0.0.1:8080", "test-token"));
+        assertNotNull(new KeyorixClient("http://[::1]:8080", "test-token"));
+    }
+
+    @Test
+    void testClientRejectsNonLoopbackHttp() {
+        assertThrows(KeyorixException.class, () -> new KeyorixClient("http://example.com:8080", "test-token"));
+    }
+
+    @Test
+    void testClientRejectsNonHttpScheme() {
+        assertThrows(KeyorixException.class, () -> new KeyorixClient("file:///etc/passwd", "test-token"));
+        assertThrows(KeyorixException.class, () -> new KeyorixClient("ftp://example.com", "test-token"));
     }
 
     @Test
