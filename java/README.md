@@ -22,8 +22,8 @@ Add to your `pom.xml`:
 import com.keyorix.Keyorix;
 import com.keyorix.KeyorixClient;
 
-String token = Keyorix.login("http://your-server:8080", "admin", "password");
-KeyorixClient client = Keyorix.newClient("http://your-server:8080", token);
+String token = Keyorix.login("https://your-server:8443", "admin", "password");
+KeyorixClient client = Keyorix.newClient("https://your-server:8443", token);
 
 String dbPassword = client.getSecret("db-password", "production");
 

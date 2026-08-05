@@ -8,8 +8,8 @@
  *
  *   const keyorix = require('@keyorixhq/sdk');
  *
- *   const token = await keyorix.login('http://your-server:8080', 'admin', 'password');
- *   const client = new keyorix.Client('http://your-server:8080', token);
+ *   const token = await keyorix.login('https://your-server:8443', 'admin', 'password');
+ *   const client = new keyorix.Client('https://your-server:8443', token);
  *
  *   const dbPassword = await client.getSecret('db-password', 'production');
  *   const secrets = await client.listSecrets('production');
@@ -77,6 +77,30 @@ function parseUrl(serverUrl) {
   };
 }
 
+function isLoopbackHost(hostname) {
+  const host = hostname.toLowerCase().replace(/^\[|\]$/g, '');
+  return host === 'localhost' || host === '::1' || /^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(host);
+}
+
+// Rejects any scheme but https; allows http only for localhost/loopback. A
+// bearer token and every secret value would otherwise be sent/received in
+// cleartext, and an unrestricted scheme (e.g. file://) would let a
+// caller-influenced serverUrl reach something other than an HTTP server
+// entirely.
+function validateServerUrl(serverUrl) {
+  let u;
+  try {
+    u = new URL(serverUrl);
+  } catch (err) {
+    throw new KeyorixError(`Invalid server URL '${serverUrl}': ${err.message}`);
+  }
+  if (u.protocol === 'https:') return;
+  if (u.protocol === 'http:' && isLoopbackHost(u.hostname)) return;
+  throw new KeyorixError(
+    `Server URL '${serverUrl}' must use https:// (http:// is only allowed for localhost/loopback)`
+  );
+}
+
 // ── login ────────────────────────────────────────────────────────────────────
 
 /**
@@ -89,6 +113,7 @@ function parseUrl(serverUrl) {
  * @returns {Promise<string>} Session token
  */
 async function login(serverUrl, username, password, timeout = 30000) {
+  validateServerUrl(serverUrl);
   const base = parseUrl(serverUrl);
   const body = JSON.stringify({ username, password });
 
@@ -130,6 +155,7 @@ class Client {
    * @param {number} [opts.timeout=30000] - Timeout in milliseconds
    */
   constructor(serverUrl, token, opts = {}) {
+    validateServerUrl(serverUrl);
     this._base = serverUrl.replace(/\/$/, '');
     this._token = token;
     this._timeout = opts.timeout || 30000;

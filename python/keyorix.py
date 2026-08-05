@@ -6,11 +6,11 @@ Quick start:
     import keyorix
 
     # Option 1: use a token directly
-    client = keyorix.Client("http://your-server:8080", "your-token")
+    client = keyorix.Client("https://your-server:8443", "your-token")
 
     # Option 2: log in with username/password
-    token = keyorix.login("http://your-server:8080", "admin", "password")
-    client = keyorix.Client("http://your-server:8080", token)
+    token = keyorix.login("https://your-server:8443", "admin", "password")
+    client = keyorix.Client("https://your-server:8443", token)
 
     # Get a secret
     db_password = client.get_secret("db-password", "production")
@@ -19,9 +19,11 @@ Quick start:
     secrets = client.list_secrets("production")
 """
 
+import ipaddress
 import json
-import urllib.request
 import urllib.error
+import urllib.parse
+import urllib.request
 from dataclasses import dataclass
 from datetime import datetime
 from typing import List, Optional
@@ -42,6 +44,37 @@ class KeyorixError(Exception):
         super().__init__(message)
         self.status_code = status_code
         self.response_body = response_body
+
+
+def _is_loopback_host(host: Optional[str]) -> bool:
+    if host is None:
+        return False
+    if host.lower() == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
+
+
+def _validate_server_url(server_url: str) -> None:
+    """Reject any scheme but https; allow http only for localhost/loopback.
+
+    A bearer token and every secret value would otherwise be sent/received
+    in cleartext, and an unrestricted scheme (e.g. file://) would let a
+    caller-influenced server_url reach something other than an HTTP server
+    entirely.
+    """
+    parsed = urllib.parse.urlsplit(server_url)
+    scheme = parsed.scheme.lower()
+    if scheme == "https":
+        return
+    if scheme == "http" and _is_loopback_host(parsed.hostname):
+        return
+    raise KeyorixError(
+        f"server_url {server_url!r} must use https:// "
+        "(http:// is only allowed for localhost/loopback)"
+    )
 
 
 class AuthError(KeyorixError):
@@ -131,6 +164,7 @@ def login(server_url: str, username: str, password: str, timeout: int = 30) -> s
         AuthError: If authentication fails
         KeyorixError: On other errors
     """
+    _validate_server_url(server_url)
     payload = json.dumps({"username": username, "password": password}).encode()
     req = urllib.request.Request(
         f"{server_url.rstrip('/')}/auth/login",
@@ -162,6 +196,7 @@ class Client:
     """
 
     def __init__(self, server_url: str, token: str, timeout: int = 30):
+        _validate_server_url(server_url)
         self._base = server_url.rstrip("/")
         self._token = token
         self._timeout = timeout
@@ -292,7 +327,3 @@ class Client:
         """
         data = self._request("GET", f"/api/v1/projects/{project_id}/environments")
         return [Environment._from_dict(e) for e in data.get("data", {}).get("environments", [])]
-
-
-# Fix missing import
-import urllib.parse

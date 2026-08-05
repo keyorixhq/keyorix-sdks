@@ -59,7 +59,10 @@ func main() {
 	}
 
 	log.Printf("🔐 Connecting to Keyorix at %s", server)
-	client := keyorix.New(server, token)
+	client, err := keyorix.New(server, token)
+	if err != nil {
+		log.Fatalf("Failed to create Keyorix client: %v", err)
+	}
 
 	if err := client.Health(ctx); err != nil {
 		log.Fatalf("Keyorix health check failed: %v", err)

@@ -40,6 +40,7 @@ public final class Keyorix {
      * Authenticates with the Keyorix server and returns a session token.
      */
     public static String login(String serverUrl, String username, String password, Duration timeout) throws KeyorixException {
+        KeyorixClient.validateServerUrl(serverUrl);
         String url = serverUrl.replaceAll("/$", "") + LOGIN_PATH;
         String body = "{\"username\":\"" + escape(username) + "\",\"password\":\"" + escape(password) + "\"}";
 
@@ -78,14 +79,14 @@ public final class Keyorix {
     /**
      * Creates a new {@link KeyorixClient}.
      */
-    public static KeyorixClient newClient(String serverUrl, String token) {
+    public static KeyorixClient newClient(String serverUrl, String token) throws KeyorixException {
         return new KeyorixClient(serverUrl, token);
     }
 
     /**
      * Creates a new {@link KeyorixClient} with a custom timeout.
      */
-    public static KeyorixClient newClient(String serverUrl, String token, Duration timeout) {
+    public static KeyorixClient newClient(String serverUrl, String token, Duration timeout) throws KeyorixException {
         return new KeyorixClient(serverUrl, token, timeout);
     }
 
