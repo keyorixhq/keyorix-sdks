@@ -118,7 +118,7 @@ public class KeyorixClient {
             if (status == 401) throw new AuthException("Unauthorized — check your token");
             if (status != 200) {
                 String body = readStream(conn.getErrorStream());
-                throw new KeyorixException("Server returned " + status + ": " + body);
+                throw new KeyorixException("Server returned " + status, status, body);
             }
             String body = readStream(conn.getInputStream());
             conn.disconnect();
