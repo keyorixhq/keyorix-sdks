@@ -34,6 +34,24 @@ async function runTests() {
   const clientCustom = new Client('http://localhost:8080', 'tok', { timeout: 5000 });
   assert(clientCustom._timeout === 5000, 'Client custom timeout');
 
+  // Server URL scheme restriction
+  assert((() => { new Client('https://example.com:8443', 'tok'); return true; })(), 'Client allows https://');
+  assert((() => { new Client('http://localhost:8080', 'tok'); return true; })(), 'Client allows http:// localhost');
+  assert((() => { new Client('http://127.0.0.1:8080', 'tok'); return true; })(), 'Client allows http:// 127.0.0.1');
+  assert((() => { new Client('http://[::1]:8080', 'tok'); return true; })(), 'Client allows http:// ::1');
+  assert((() => {
+    try { new Client('http://example.com:8080', 'tok'); return false; }
+    catch (e) { return e instanceof KeyorixError; }
+  })(), 'Client rejects non-loopback http://');
+  assert((() => {
+    try { new Client('file:///etc/passwd', 'tok'); return false; }
+    catch (e) { return e instanceof KeyorixError; }
+  })(), 'Client rejects file:// scheme');
+  assert(await (async () => {
+    try { await login('http://example.com:8080', 'user', 'pass'); return false; }
+    catch (e) { return e instanceof KeyorixError; }
+  })(), 'login rejects non-loopback http://');
+
   // Integration tests (only if server is available)
   if (process.env.KEYORIX_SERVER) {
     console.log('\nIntegration tests');

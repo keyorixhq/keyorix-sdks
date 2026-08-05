@@ -12,8 +12,8 @@ Zero external dependencies. Uses Node.js built-in http/https modules.
 
     const keyorix = require('@keyorixhq/sdk');
 
-    const token = await keyorix.login('http://your-server:8080', 'admin', 'password');
-    const client = new keyorix.Client('http://your-server:8080', token);
+    const token = await keyorix.login('https://your-server:8443', 'admin', 'password');
+    const client = new keyorix.Client('https://your-server:8443', token);
 
     const dbPassword = await client.getSecret('db-password', 'production');
 
