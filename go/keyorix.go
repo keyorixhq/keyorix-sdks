@@ -2,7 +2,7 @@
 //
 // Quick start:
 //
-//	client := keyorix.New("http://your-server:8080", "your-session-token")
+//	client, err := keyorix.New("https://your-server:8443", "your-session-token")
 //	secret, err := client.GetSecret(ctx, "db-password", "production")
 package keyorix
 
@@ -12,8 +12,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 )
 
@@ -70,10 +72,45 @@ func WithTimeout(d time.Duration) Option {
 	return func(c *Client) { c.httpClient.Timeout = d }
 }
 
+// validateServerURL rejects any scheme other than https, and allows http only
+// for loopback hosts (localhost/127.0.0.0/8/::1) for local dev. A bearer token
+// and every secret value would otherwise be sent/received in cleartext, and an
+// unrestricted scheme (e.g. file://) would let a caller-influenced serverURL
+// reach something other than an HTTP server entirely.
+func validateServerURL(rawURL string) error {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return fmt.Errorf("keyorix: invalid server URL %q: %w", rawURL, err)
+	}
+	switch strings.ToLower(u.Scheme) {
+	case "https":
+		return nil
+	case "http":
+		if isLoopbackHost(u.Hostname()) {
+			return nil
+		}
+	}
+	return fmt.Errorf("keyorix: server URL %q must use https:// (http:// is only allowed for localhost/loopback)", rawURL)
+}
+
+func isLoopbackHost(host string) bool {
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	if ip := net.ParseIP(host); ip != nil {
+		return ip.IsLoopback()
+	}
+	return false
+}
+
 // New creates a new Keyorix client.
-// serverURL is the base URL of your Keyorix server (e.g. "http://localhost:8080").
+// serverURL is the base URL of your Keyorix server and must use https://
+// (http:// is only accepted for localhost/loopback).
 // token is a session token obtained via the login endpoint or keyorix CLI.
-func New(serverURL, token string, opts ...Option) *Client {
+func New(serverURL, token string, opts ...Option) (*Client, error) {
+	if err := validateServerURL(serverURL); err != nil {
+		return nil, err
+	}
 	c := &Client{
 		baseURL: serverURL,
 		token:   token,
@@ -84,12 +121,16 @@ func New(serverURL, token string, opts ...Option) *Client {
 	for _, opt := range opts {
 		opt(c)
 	}
-	return c
+	return c, nil
 }
 
 // Login authenticates with username and password and returns a session token.
 // Use this to obtain a token programmatically instead of hardcoding one.
+// serverURL must use https:// (http:// is only accepted for localhost/loopback).
 func Login(ctx context.Context, serverURL, username, password string) (string, error) {
+	if err := validateServerURL(serverURL); err != nil {
+		return "", err
+	}
 	body, _ := json.Marshal(map[string]string{
 		"username": username,
 		"password": password,

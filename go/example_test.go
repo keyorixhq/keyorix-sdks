@@ -27,7 +27,10 @@ func TestIntegration_Login(t *testing.T) {
 	}
 	fmt.Printf("✅ Login OK, token: %s...\n", token[:8])
 
-	client := keyorix.New(server, token)
+	client, err := keyorix.New(server, token)
+	if err != nil {
+		t.Fatalf("New failed: %v", err)
+	}
 
 	// Health check
 	if err := client.Health(ctx); err != nil {

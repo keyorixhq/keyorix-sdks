@@ -44,6 +44,27 @@ class TestClient(unittest.TestCase):
     def test_auth_error(self):
         self.assertTrue(issubclass(keyorix.AuthError, keyorix.KeyorixError))
 
+    def test_client_allows_https(self):
+        client = keyorix.Client("https://example.com:8443", "test-token")
+        self.assertEqual(client._base, "https://example.com:8443")
+
+    def test_client_allows_loopback_http(self):
+        for url in ("http://localhost:8080", "http://127.0.0.1:8080", "http://[::1]:8080"):
+            keyorix.Client(url, "test-token")
+
+    def test_client_rejects_non_loopback_http(self):
+        with self.assertRaises(keyorix.KeyorixError):
+            keyorix.Client("http://example.com:8080", "test-token")
+
+    def test_client_rejects_non_http_scheme(self):
+        for url in ("file:///etc/passwd", "ftp://example.com"):
+            with self.assertRaises(keyorix.KeyorixError):
+                keyorix.Client(url, "test-token")
+
+    def test_login_rejects_non_loopback_http(self):
+        with self.assertRaises(keyorix.KeyorixError):
+            keyorix.login("http://example.com:8080", "user", "pass")
+
 
 if __name__ == "__main__":
     unittest.main()

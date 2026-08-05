@@ -25,14 +25,20 @@ func main() {
     ctx := context.Background()
 
     // Option 1: use a token directly
-    client := keyorix.New("http://your-server:8080", "your-session-token")
-
-    // Option 2: log in with username/password
-    token, err := keyorix.Login(ctx, "http://your-server:8080", "admin", "your-password")
+    client, err := keyorix.New("https://your-server:8443", "your-session-token")
     if err != nil {
         log.Fatal(err)
     }
-    client = keyorix.New("http://your-server:8080", token)
+
+    // Option 2: log in with username/password
+    token, err := keyorix.Login(ctx, "https://your-server:8443", "admin", "your-password")
+    if err != nil {
+        log.Fatal(err)
+    }
+    client, err = keyorix.New("https://your-server:8443", token)
+    if err != nil {
+        log.Fatal(err)
+    }
 
     // Get a secret value
     dbPassword, err := client.GetSecret(ctx, "db-password", "production")
@@ -54,10 +60,11 @@ func main() {
 
 ## API
 
-### `keyorix.New(serverURL, token string, opts ...Option) *Client`
-Creates a new client. Get a token via `keyorix.Login()` or from the Keyorix CLI:
+### `keyorix.New(serverURL, token string, opts ...Option) (*Client, error)`
+Creates a new client. `serverURL` must use `https://` (`http://` is only accepted
+for localhost/loopback). Get a token via `keyorix.Login()` or from the Keyorix CLI:
 ```bash
-keyorix connect http://your-server --username admin --password your-password
+keyorix connect https://your-server --username admin --password your-password
 # Token is saved in ~/.keyorix/cli.yaml
 ```
 
@@ -75,7 +82,7 @@ Checks if the server is reachable. Returns nil if healthy.
 
 ### Options
 ```go
-keyorix.New(url, token,
+client, err := keyorix.New(url, token,
     keyorix.WithTimeout(10 * time.Second),
     keyorix.WithHTTPClient(myHTTPClient),
 )
@@ -89,7 +96,10 @@ server := os.Getenv("KEYORIX_SERVER")
 if token == "" || server == "" {
     log.Fatal("KEYORIX_TOKEN and KEYORIX_SERVER must be set")
 }
-client := keyorix.New(server, token)
+client, err := keyorix.New(server, token)
+if err != nil {
+    log.Fatal(err)
+}
 ```
 
 ## Requirements

@@ -3,6 +3,8 @@ package com.keyorix;
 import java.io.IOException;
 import java.io.InputStream;
 import java.net.HttpURLConnection;
+import java.net.URI;
+import java.net.URISyntaxException;
 import java.net.URL;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
@@ -16,8 +18,8 @@ import java.util.List;
  *
  * <p>Quick start:
  * <pre>
- *   String token = Keyorix.login("http://your-server:8080", "admin", "password");
- *   KeyorixClient client = new KeyorixClient("http://your-server:8080", token);
+ *   String token = Keyorix.login("https://your-server:8443", "admin", "password");
+ *   KeyorixClient client = new KeyorixClient("https://your-server:8443", token);
  *   String dbPassword = client.getSecret("db-password", "production");
  * </pre>
  */
@@ -33,24 +35,57 @@ public class KeyorixClient {
     /**
      * Creates a new KeyorixClient.
      *
-     * @param baseUrl  Base URL of your Keyorix server (e.g. "http://localhost:8080")
+     * @param baseUrl  Base URL of your Keyorix server; must use https:// (http://
+     *                 is only accepted for localhost/loopback)
      * @param token    Session token obtained via {@link Keyorix#login}
+     * @throws KeyorixException if baseUrl is invalid or uses a disallowed scheme
      */
-    public KeyorixClient(String baseUrl, String token) {
+    public KeyorixClient(String baseUrl, String token) throws KeyorixException {
         this(baseUrl, token, Duration.ofSeconds(30));
     }
 
     /**
      * Creates a new KeyorixClient with a custom timeout.
      *
-     * @param baseUrl  Base URL of your Keyorix server
+     * @param baseUrl  Base URL of your Keyorix server; must use https:// (http://
+     *                 is only accepted for localhost/loopback)
      * @param token    Session token
      * @param timeout  Request timeout
+     * @throws KeyorixException if baseUrl is invalid or uses a disallowed scheme
      */
-    public KeyorixClient(String baseUrl, String token, Duration timeout) {
+    public KeyorixClient(String baseUrl, String token, Duration timeout) throws KeyorixException {
+        validateServerUrl(baseUrl);
         this.baseUrl = baseUrl.replaceAll("/$", "");
         this.token = token;
         this.timeoutMs = (int) timeout.toMillis();
+    }
+
+    /**
+     * Rejects any scheme but https; allows http only for localhost/loopback. A
+     * bearer token and every secret value would otherwise be sent/received in
+     * cleartext, and an unrestricted scheme (e.g. file://) would let a
+     * caller-influenced baseUrl reach something other than an HTTP server
+     * entirely.
+     */
+    static void validateServerUrl(String serverUrl) throws KeyorixException {
+        URI uri;
+        try {
+            uri = new URI(serverUrl);
+        } catch (URISyntaxException e) {
+            throw new KeyorixException("Invalid server URL '" + serverUrl + "': " + e.getMessage());
+        }
+        String scheme = uri.getScheme() == null ? "" : uri.getScheme().toLowerCase();
+        if ("https".equals(scheme)) return;
+        if ("http".equals(scheme) && isLoopbackHost(uri.getHost())) return;
+        throw new KeyorixException(
+            "Server URL '" + serverUrl + "' must use https:// (http:// is only allowed for localhost/loopback)");
+    }
+
+    private static boolean isLoopbackHost(String host) {
+        if (host == null) return false;
+        String h = host.toLowerCase();
+        return h.equals("localhost") || h.equals("::1") || h.equals("[::1]")
+            || h.matches("127\\.\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}");
     }
 
     /**
