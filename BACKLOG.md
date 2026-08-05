@@ -6,25 +6,6 @@ each section. For architectural rationale see the `keyorix` repo's ADRs
 
 ## In progress / next
 
-- **All four SDKs: restrict URL schemes on the caller-supplied server URL.**
-  Found during ADR-072's Phase 7 supply-chain audit. `python/keyorix.py`
-  calls `urllib.request.urlopen` on `server_url` with no scheme
-  restriction, producing 4 Medium bandit findings (B310) currently
-  suppressed by `continue-on-error: true` in `python.yml`. In a general
-  library this is a Medium; in a secrets client it is the difference
-  between reaching the vault and silently reading a local file or reaching
-  an unintended host, whenever `server_url` originates from an env var or
-  config an attacker can influence. Reachable schemes include `file://`
-  and `ftp://`. Fix: allow `https://` only, with `http://` permitted
-  solely for explicit localhost/loopback — matching the pattern the Go MCP
-  server's `KEYORIX_URL` validation already establishes in the `keyorix`
-  repo (`docs/mcp.md`'s "HTTPS enforced" section). This is a per-language
-  HTTP client concern, not Python-specific — the other three SDKs
-  (`go/keyorix.go`, `node/keyorix.js`, `java/KeyorixClient.java`) all
-  build their request URL from the same kind of caller-supplied base URL
-  and need the same audit, not just Python's. Not implemented here —
-  backlog entry only.
-
 - **All four SDKs: errors embed the raw server response body verbatim.**
   Also found during Phase 7. On any non-2xx response — including the
   get-secret-value call specifically — every SDK's shared request-error
@@ -44,3 +25,14 @@ each section. For architectural rationale see the `keyorix` repo's ADRs
   implemented here — backlog entry only.
 
 ## Done
+
+- **All four SDKs: restrict URL schemes on the caller-supplied server URL.**
+  Found during ADR-072's Phase 7 supply-chain audit (4 Medium bandit B310
+  findings on Python's `urllib.request.urlopen`). Fixed: `server_url`/
+  `serverUrl`/`baseUrl` is now validated at client-construction/login time
+  in all four SDKs — `https://` is required, with `http://` permitted only
+  for localhost/loopback, matching the `keyorix` repo's Go MCP server
+  `KEYORIX_URL` precedent (`docs/mcp.md`'s "HTTPS enforced" section).
+  Go's `New()` and Java's `KeyorixClient`/`Keyorix.login()` constructors
+  now return/throw on an invalid scheme (a breaking API change, acceptable
+  pre-1.0). See `fix/sdk-url-scheme-restriction`.
