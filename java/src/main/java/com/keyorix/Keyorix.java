@@ -62,7 +62,7 @@ public final class Keyorix {
             conn.disconnect();
 
             if (status != 200) {
-                throw new AuthException("Login failed (HTTP " + status + "): " + response);
+                throw new AuthException("Login failed (HTTP " + status + ")", status, response);
             }
 
             String token = JsonParser.parseToken(response);

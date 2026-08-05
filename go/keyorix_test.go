@@ -2,6 +2,10 @@ package keyorix
 
 import (
 	"context"
+	"errors"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 )
@@ -77,5 +81,48 @@ func TestLogin_rejectsNonLoopbackHTTP(t *testing.T) {
 	_, err := Login(context.Background(), "http://example.com:8080", "user", "pass")
 	if err == nil {
 		t.Error("expected error for non-loopback http:// URL, got nil")
+	}
+}
+
+func TestAPIError_ErrorOmitsBody(t *testing.T) {
+	err := &APIError{StatusCode: 500, Body: "<html>internal stack trace here</html>"}
+	msg := err.Error()
+	if msg != "keyorix: server returned 500" {
+		t.Errorf("expected generic message, got %q", msg)
+	}
+	if strings.Contains(msg, "stack trace") {
+		t.Error("Error() must not embed the raw response body")
+	}
+	if err.Body != "<html>internal stack trace here</html>" {
+		t.Error("Body field should still carry the raw response body for callers who opt in")
+	}
+}
+
+func TestListSecrets_wrapsServerErrorWithoutLeakingBody(t *testing.T) {
+	const raw = "internal: secret_key=super-sensitive-detail"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+		w.Write([]byte(raw))
+	}))
+	defer srv.Close()
+
+	c, err := New(srv.URL, "test-token")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	_, err = c.ListSecrets(context.Background(), "")
+	if err == nil {
+		t.Fatal("expected an error")
+	}
+	if strings.Contains(err.Error(), raw) {
+		t.Errorf("err.Error() leaked the raw response body: %v", err)
+	}
+
+	var apiErr *APIError
+	if !errors.As(err, &apiErr) {
+		t.Fatalf("expected *APIError, got %T", err)
+	}
+	if apiErr.Body != raw {
+		t.Errorf("expected APIError.Body to carry the raw body, got %q", apiErr.Body)
 	}
 }

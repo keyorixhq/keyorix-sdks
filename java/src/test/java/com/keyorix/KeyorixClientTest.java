@@ -1,5 +1,10 @@
 package com.keyorix;
 
+import com.sun.net.httpserver.HttpServer;
+import java.io.IOException;
+import java.io.OutputStream;
+import java.net.InetSocketAddress;
+import java.nio.charset.StandardCharsets;
 import org.junit.jupiter.api.Test;
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -54,6 +59,37 @@ class KeyorixClientTest {
         AuthException ex = new AuthException("unauthorized");
         assertInstanceOf(KeyorixException.class, ex);
         assertEquals("unauthorized", ex.getMessage());
+    }
+
+    @Test
+    void testKeyorixException_messageOmitsBody() {
+        KeyorixException ex = new KeyorixException("Server returned 500", 500, "internal stack trace here");
+        assertFalse(ex.getMessage().contains("internal stack trace here"));
+        assertEquals(500, ex.getStatusCode());
+        assertEquals("internal stack trace here", ex.getResponseBody());
+    }
+
+    @Test
+    void testGet_redactsBodyFromMessage() throws IOException, KeyorixException {
+        String raw = "internal: secret_key=super-sensitive-detail";
+        HttpServer server = HttpServer.create(new InetSocketAddress("localhost", 0), 0);
+        server.createContext("/api/v1/secrets", exchange -> {
+            byte[] resp = raw.getBytes(StandardCharsets.UTF_8);
+            exchange.sendResponseHeaders(500, resp.length);
+            try (OutputStream os = exchange.getResponseBody()) {
+                os.write(resp);
+            }
+        });
+        server.start();
+        try {
+            KeyorixClient client = new KeyorixClient("http://localhost:" + server.getAddress().getPort(), "test-token");
+            KeyorixException ex = assertThrows(KeyorixException.class, () -> client.listSecrets(null));
+            assertFalse(ex.getMessage().contains(raw), "message must not leak the raw response body");
+            assertEquals(raw, ex.getResponseBody());
+            assertEquals(500, ex.getStatusCode());
+        } finally {
+            server.stop(0);
+        }
     }
 
     @Test

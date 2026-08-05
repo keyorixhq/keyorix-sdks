@@ -1,5 +1,6 @@
 'use strict';
 
+const http = require('node:http');
 const { Client, login, KeyorixError, AuthError, SecretNotFoundError } = require('./keyorix');
 
 let passed = 0;
@@ -51,6 +52,29 @@ async function runTests() {
     try { await login('http://example.com:8080', 'user', 'pass'); return false; }
     catch (e) { return e instanceof KeyorixError; }
   })(), 'login rejects non-loopback http://');
+
+  // Error redaction: server error body must not leak into err.message
+  const raw = 'internal: secret_key=super-sensitive-detail';
+  const fakeServer = http.createServer((req, res) => {
+    res.writeHead(500);
+    res.end(raw);
+  });
+  await new Promise((resolve) => fakeServer.listen(0, resolve));
+  try {
+    const port = fakeServer.address().port;
+    const badClient = new Client(`http://localhost:${port}`, 'tok');
+    try {
+      await badClient.listSecrets();
+      assert(false, 'listSecrets should have thrown');
+    } catch (e) {
+      assert(e instanceof KeyorixError, 'listSecrets throws KeyorixError on 500');
+      assert(!e.message.includes(raw), 'err.message does not leak the raw response body');
+      assert(e.responseBody === raw, 'err.responseBody carries the raw response body');
+      assert(e.statusCode === 500, 'err.statusCode carries the HTTP status');
+    }
+  } finally {
+    fakeServer.close();
+  }
 
   // Integration tests (only if server is available)
   if (process.env.KEYORIX_SERVER) {

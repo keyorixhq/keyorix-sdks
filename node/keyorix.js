@@ -20,23 +20,31 @@ const https = require('node:https');
 
 // ── Errors ───────────────────────────────────────────────────────────────────
 
+// KeyorixError's message deliberately omits the raw response body: it's
+// server-controlled content that this SDK's own README quick-start passes
+// straight to console.error, and an unconditional relay into that path is
+// exactly how untrusted content ends up verbatim in application logs.
+// Callers who need the body for their own (redacted) logging can read the
+// responseBody property directly.
 class KeyorixError extends Error {
-  constructor(message) {
+  constructor(message, { statusCode, responseBody } = {}) {
     super(message);
     this.name = 'KeyorixError';
+    this.statusCode = statusCode;
+    this.responseBody = responseBody;
   }
 }
 
 class AuthError extends KeyorixError {
-  constructor(message) {
-    super(message);
+  constructor(message, opts) {
+    super(message, opts);
     this.name = 'AuthError';
   }
 }
 
 class SecretNotFoundError extends KeyorixError {
-  constructor(message) {
-    super(message);
+  constructor(message, opts) {
+    super(message, opts);
     this.name = 'SecretNotFoundError';
   }
 }
@@ -128,7 +136,7 @@ async function login(serverUrl, username, password, timeout = 30000) {
   }
 
   if (resp.status !== 200) {
-    throw new AuthError(`Login failed (HTTP ${resp.status}): ${resp.body}`);
+    throw new AuthError(`Login failed (HTTP ${resp.status})`, { statusCode: resp.status, responseBody: resp.body });
   }
 
   const data = JSON.parse(resp.body);
@@ -172,7 +180,7 @@ class Client {
 
     if (resp.status === 401) throw new AuthError('Unauthorized — check your token');
     if (resp.status !== 200) {
-      throw new KeyorixError(`Server returned ${resp.status}: ${resp.body}`);
+      throw new KeyorixError(`Server returned ${resp.status}`, { statusCode: resp.status, responseBody: resp.body });
     }
 
     return JSON.parse(resp.body);
@@ -272,7 +280,7 @@ class Client {
       throw new KeyorixError(`Request failed: ${err.message}`);
     }
     if (resp.status !== 200 && resp.status !== 201) {
-      throw new KeyorixError(`Server returned ${resp.status}: ${resp.body}`);
+      throw new KeyorixError(`Server returned ${resp.status}`, { statusCode: resp.status, responseBody: resp.body });
     }
     const p = JSON.parse(resp.body)?.data || {};
     return { id: p.ID, name: p.Name, description: p.Description, createdAt: p.CreatedAt };
