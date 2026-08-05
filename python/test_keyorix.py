@@ -1,7 +1,9 @@
 """Unit tests for keyorix Python SDK."""
 
+import io
 import unittest
-from unittest.mock import patch, MagicMock
+import urllib.error
+from unittest.mock import patch
 import json
 import keyorix
 
@@ -43,6 +45,27 @@ class TestClient(unittest.TestCase):
 
     def test_auth_error(self):
         self.assertTrue(issubclass(keyorix.AuthError, keyorix.KeyorixError))
+
+    def test_keyorix_error_message_omits_body(self):
+        err = keyorix.KeyorixError(
+            "Server returned 500", status_code=500, response_body="internal stack trace here"
+        )
+        self.assertNotIn("internal stack trace here", str(err))
+        self.assertEqual(err.status_code, 500)
+        self.assertEqual(err.response_body, "internal stack trace here")
+
+    @patch("keyorix.urllib.request.urlopen")
+    def test_request_redacts_body_from_message(self, mock_urlopen):
+        raw = "internal: secret_key=super-sensitive-detail"
+        mock_urlopen.side_effect = urllib.error.HTTPError(
+            "http://localhost:8080/api/v1/secrets", 500, "Internal Server Error", {}, io.BytesIO(raw.encode())
+        )
+        client = keyorix.Client("http://localhost:8080", "test-token")
+        with self.assertRaises(keyorix.KeyorixError) as ctx:
+            client.list_secrets()
+        self.assertNotIn(raw, str(ctx.exception))
+        self.assertEqual(ctx.exception.response_body, raw)
+        self.assertEqual(ctx.exception.status_code, 500)
 
 
 if __name__ == "__main__":

@@ -28,9 +28,20 @@ from typing import List, Optional
 
 
 class KeyorixError(Exception):
-    """Raised when the Keyorix API returns an error."""
+    """Raised when the Keyorix API returns an error.
 
-    pass
+    The exception message deliberately omits the raw response body: it's
+    server-controlled content that this SDK's own README quick-start passes
+    straight to a bare `except ... as e: print(e)`, and an unconditional
+    relay into that path is exactly how untrusted content ends up verbatim
+    in application logs. Callers who need the body for their own (redacted)
+    logging can read the response_body attribute directly.
+    """
+
+    def __init__(self, message: str, *, status_code: Optional[int] = None, response_body: Optional[str] = None):
+        super().__init__(message)
+        self.status_code = status_code
+        self.response_body = response_body
 
 
 class AuthError(KeyorixError):
@@ -136,7 +147,7 @@ def login(server_url: str, username: str, password: str, timeout: int = 30) -> s
             return token
     except urllib.error.HTTPError as e:
         body = e.read().decode(errors="replace")
-        raise AuthError(f"Login failed (HTTP {e.code}): {body}") from e
+        raise AuthError(f"Login failed (HTTP {e.code})", status_code=e.code, response_body=body) from e
     except urllib.error.URLError as e:
         raise KeyorixError(f"Server unreachable: {e.reason}") from e
 
@@ -168,7 +179,7 @@ class Client:
             if e.code == 401:
                 raise AuthError("Unauthorized — check your token") from e
             body = e.read().decode(errors="replace")
-            raise KeyorixError(f"Server returned {e.code}: {body}") from e
+            raise KeyorixError(f"Server returned {e.code}", status_code=e.code, response_body=body) from e
         except urllib.error.URLError as e:
             raise KeyorixError(f"Request failed: {e.reason}") from e
 
@@ -268,7 +279,7 @@ class Client:
                 return Project._from_dict(data.get("data", {}))
         except urllib.error.HTTPError as e:
             body = e.read().decode(errors="replace")
-            raise KeyorixError(f"Failed to create project (HTTP {e.code}): {body}") from e
+            raise KeyorixError(f"Failed to create project (HTTP {e.code})", status_code=e.code, response_body=body) from e
 
     def list_environments(self, project_id: int) -> List["Environment"]:
         """List all environments for a project.
