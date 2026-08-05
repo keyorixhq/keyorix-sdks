@@ -25,22 +25,22 @@ each section. For architectural rationale see the `keyorix` repo's ADRs
   and need the same audit, not just Python's. Not implemented here —
   backlog entry only.
 
+## Done
+
 - **All four SDKs: errors embed the raw server response body verbatim.**
-  Also found during Phase 7. On any non-2xx response — including the
-  get-secret-value call specifically — every SDK's shared request-error
-  path embeds the server's raw response body into the thrown
-  error/exception message (`go/keyorix.go`, `node/keyorix.js`,
-  `python/keyorix.py`, `java/KeyorixClient.java` all do this identically).
-  Low practical risk today (a *failed* request didn't return the secret
-  value itself), but it's an unconditional trust-and-relay of upstream
+  Found during ADR-072's Phase 7 supply-chain audit. On any non-2xx
+  response — including the get-secret-value call specifically — every
+  SDK's shared request-error path embedded the server's raw response body
+  into the thrown error/exception message (`go/keyorix.go`,
+  `node/keyorix.js`, `python/keyorix.py`, `java/KeyorixClient.java` all
+  did this identically): an unconditional trust-and-relay of upstream
   content into a client-facing error that every SDK's own README
   quick-start passes straight to `log.Fatal(err)` / `console.error` /
-  equivalent — exactly the path that lands in application logs and stack
-  traces. This is the concrete candidate for the generation ADR's required
-  redaction test; the Go MCP server's `genericReadError`
-  (`internal/mcp/tools.go` in the `keyorix` repo) is the in-house
-  precedent to follow — a generic client-facing message, with the real
-  detail logged separately for an operator, not echoed back verbatim. Not
-  implemented here — backlog entry only.
-
-## Done
+  equivalent. Fixed: the exception/error message is now generic
+  (`"server returned <status>"`), following the Go MCP server's
+  `genericReadError` precedent (`internal/mcp/tools.go` in the `keyorix`
+  repo). The raw status code and body remain available to callers who
+  explicitly opt in — `APIError.Body`/`StatusCode` (Go),
+  `response_body`/`status_code` (Python), `responseBody`/`statusCode`
+  (Node), `getResponseBody()`/`getStatusCode()` (Java) — for their own
+  (redacted) logging. See `fix/sdk-error-body-redaction`.
