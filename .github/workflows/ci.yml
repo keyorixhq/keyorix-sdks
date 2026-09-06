@@ -75,6 +75,10 @@ jobs:
     # added to any of them later doesn't silently break for lack of
     # `secrets: inherit` here.
     secrets: inherit
+    with:
+      # See java.yml's `sonar` job: needed to exempt Dependabot PRs from a
+      # check they structurally can't pass (no SONAR_TOKEN in their runs).
+      pr_author: ${{ github.event.pull_request.user.login }}
 
   node:
     name: Node.js

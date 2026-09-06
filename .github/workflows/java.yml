@@ -2,6 +2,17 @@ name: Java
 
 on:
   workflow_call:
+    # A called workflow's own github.event/github.event_name reflect the
+    # workflow_call event, not the caller's original pull_request payload —
+    # see dco.yml for the same caveat. The `sonar` job below needs this to
+    # exempt Dependabot PRs, which never receive secrets.SONAR_TOKEN (GitHub
+    # withholds repo secrets from Dependabot-triggered workflow runs unless
+    # the secret is separately configured as a Dependabot secret).
+    inputs:
+      pr_author:
+        required: false
+        type: string
+        default: ''
 
 permissions:
   contents: read
@@ -184,4 +195,20 @@ jobs:
         working-directory: java
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
-        run: mvn -B verify sonar:sonar
+          # GitHub withholds repo secrets (SONAR_TOKEN here) from workflow
+          # runs triggered by Dependabot PRs unless the secret is separately
+          # configured as a Dependabot secret — it isn't. Rather than fail
+          # every automated dependency-bump PR on a check it structurally
+          # cannot pass, exempt Dependabot the same way dco.yml does: exit 0
+          # rather than skip the step, since `Analyze` is a required status
+          # check and a skipped required check blocks merge exactly like a
+          # failed one.
+          PR_AUTHOR: ${{ inputs.pr_author }}
+        run: |
+          case "$PR_AUTHOR" in
+            'dependabot[bot]'|'app/dependabot')
+              echo "Skipping Sonar analysis for automated dependency-update PR from $PR_AUTHOR (SONAR_TOKEN is unavailable to Dependabot-triggered runs)."
+              exit 0
+              ;;
+          esac
+          mvn -B verify sonar:sonar
