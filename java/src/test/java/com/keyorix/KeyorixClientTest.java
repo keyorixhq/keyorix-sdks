@@ -5,6 +5,7 @@ import java.io.IOException;
 import java.io.OutputStream;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
+import java.util.List;
 import org.junit.jupiter.api.Test;
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -87,6 +88,44 @@ class KeyorixClientTest {
             assertFalse(ex.getMessage().contains(raw), "message must not leak the raw response body");
             assertEquals(raw, ex.getResponseBody());
             assertEquals(500, ex.getStatusCode());
+        } finally {
+            server.stop(0);
+        }
+    }
+
+    @Test
+    void testListSecrets_neverSendsEnvironmentQueryParam_filtersClientSide() throws IOException, KeyorixException {
+        // keyorix-sdks#35: the server now returns 400 for a bare `environment`
+        // name query parameter (keyorix#2013), so listSecrets must never send
+        // it, and must instead filter the (unscoped) response client-side by
+        // the environment_name field every secret already carries.
+        String body = "{\"data\":{\"secrets\":[" +
+            "{\"ID\":1,\"Name\":\"db-pass\",\"Type\":\"password\",\"environment_name\":\"production\",\"ProjectID\":1,\"CreatedAt\":\"2026-01-01\"}," +
+            "{\"ID\":2,\"Name\":\"api-key\",\"Type\":\"generic\",\"environment_name\":\"staging\",\"ProjectID\":1,\"CreatedAt\":\"2026-01-01\"}" +
+            "]}}";
+        HttpServer server = HttpServer.create(new InetSocketAddress("localhost", 0), 0);
+        server.createContext("/api/v1/secrets", exchange -> {
+            if (exchange.getRequestURI().getQuery() != null && exchange.getRequestURI().getQuery().contains("environment=")) {
+                exchange.sendResponseHeaders(400, -1);
+                exchange.close();
+                return;
+            }
+            byte[] resp = body.getBytes(StandardCharsets.UTF_8);
+            exchange.sendResponseHeaders(200, resp.length);
+            try (OutputStream os = exchange.getResponseBody()) {
+                os.write(resp);
+            }
+        });
+        server.start();
+        try {
+            KeyorixClient client = new KeyorixClient("http://localhost:" + server.getAddress().getPort(), "test-token");
+
+            List<Secret> production = client.listSecrets("production");
+            assertEquals(1, production.size());
+            assertEquals("db-pass", production.get(0).getName());
+
+            List<Secret> all = client.listSecrets(null);
+            assertEquals(2, all.size());
         } finally {
             server.stop(0);
         }

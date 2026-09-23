@@ -76,6 +76,95 @@ async function runTests() {
     fakeServer.close();
   }
 
+  // keyorix-sdks#35: listSecrets must never send the rejected `environment`
+  // name query parameter (keyorix#2013 -- the server now returns 400 for
+  // it), and must instead filter the (unscoped) response client-side by the
+  // environment_name field every secret already carries.
+  {
+    const envFilterServer = http.createServer((req, res) => {
+      const url = new URL(req.url, 'http://localhost');
+      if (url.searchParams.get('environment')) {
+        res.writeHead(400);
+        res.end();
+        return;
+      }
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({
+        data: {
+          secrets: [
+            { ID: 1, Name: 'db-pass', Type: 'password', ProjectID: 1, environment_name: 'production', CreatedAt: '2026-01-01T00:00:00Z' },
+            { ID: 2, Name: 'api-key', Type: 'generic', ProjectID: 1, environment_name: 'staging', CreatedAt: '2026-01-01T00:00:00Z' },
+          ],
+        },
+      }));
+    });
+    await new Promise((resolve) => envFilterServer.listen(0, resolve));
+    try {
+      const port = envFilterServer.address().port;
+      const c = new Client(`http://localhost:${port}`, 'tok');
+      const prod = await c.listSecrets('production');
+      assert(prod.length === 1 && prod[0].name === 'db-pass', 'listSecrets filters client-side by environment name');
+      const all = await c.listSecrets();
+      assert(all.length === 2, 'listSecrets() with no environment returns everything');
+    } finally {
+      envFilterServer.close();
+    }
+  }
+
+  // listSecretsInProject/getSecretInProject: resolve environment name to its
+  // numeric ID within the given project and send project_id+environment_id
+  // -- the filters the server actually honors -- not the rejected name param.
+  {
+    const gotQueries = [];
+    const inProjectServer = http.createServer((req, res) => {
+      const url = new URL(req.url, 'http://localhost');
+      if (url.pathname === '/api/v1/projects/1/environments') {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ data: { environments: [{ ID: 7, ProjectID: 1, Name: 'production' }] } }));
+        return;
+      }
+      if (url.pathname === '/api/v1/secrets') {
+        gotQueries.push(url.search);
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({
+          data: { secrets: [{ ID: 42, Name: 'db-pass', Type: 'password', ProjectID: 1, environment_name: 'production', CreatedAt: '2026-01-01T00:00:00Z' }] },
+        }));
+        return;
+      }
+      if (url.pathname === '/api/v1/secrets/42') {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ data: { value: 's3cr3t' } }));
+        return;
+      }
+      res.writeHead(404);
+      res.end();
+    });
+    await new Promise((resolve) => inProjectServer.listen(0, resolve));
+    try {
+      const port = inProjectServer.address().port;
+      const c = new Client(`http://localhost:${port}`, 'tok');
+
+      const secrets = await c.listSecretsInProject(1, 'production');
+      assert(secrets.length === 1 && secrets[0].name === 'db-pass', 'listSecretsInProject returns the scoped secret');
+      assert(gotQueries.length === 1, 'listSecretsInProject makes exactly one /api/v1/secrets request');
+      assert(gotQueries[0].includes('project_id=1'), 'listSecretsInProject sends project_id');
+      assert(gotQueries[0].includes('environment_id=7'), 'listSecretsInProject resolves environment name to its numeric ID');
+      assert(!gotQueries[0].includes('environment=production'), 'listSecretsInProject never sends the rejected bare environment name filter');
+
+      const value = await c.getSecretInProject(1, 'db-pass', 'production');
+      assert(value === 's3cr3t', 'getSecretInProject returns the resolved secret value');
+
+      try {
+        await c.listSecretsInProject(1, 'nonexistent-env');
+        assert(false, 'listSecretsInProject should have thrown for an unknown environment name');
+      } catch (e) {
+        assert(e instanceof KeyorixError, 'listSecretsInProject throws KeyorixError for an unknown environment name');
+      }
+    } finally {
+      inProjectServer.close();
+    }
+  }
+
   // Integration tests (only if server is available)
   if (process.env.KEYORIX_SERVER) {
     console.log('\nIntegration tests');

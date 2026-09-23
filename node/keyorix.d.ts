@@ -40,6 +40,8 @@ export declare class Client {
   health(): Promise<boolean>;
   listSecrets(environment?: string): Promise<Secret[]>;
   getSecret(name: string, environment?: string): Promise<string>;
+  listSecretsInProject(projectId: number, environment?: string): Promise<Secret[]>;
+  getSecretInProject(projectId: number, name: string, environment?: string): Promise<string>;
   listProjects(): Promise<Project[]>;
   createProject(name: string, description?: string): Promise<Project>;
   listEnvironments(projectId: number): Promise<Environment[]>;

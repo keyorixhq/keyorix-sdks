@@ -72,10 +72,30 @@ keyorix connect https://your-server --username admin --password your-password
 Authenticates and returns a session token. Use this to avoid hardcoding tokens.
 
 ### `client.GetSecret(ctx, name, environment string) (string, error)`
-Returns the plaintext value of a secret by name and environment.
+Returns the plaintext value of a secret by name and environment. `environment` is
+matched by name across every project you can read — if the same environment name
+exists in more than one project, use `GetSecretInProject` to disambiguate.
 
 ### `client.ListSecrets(ctx, environment string) ([]Secret, error)`
-Returns all secrets visible to the authenticated user. Pass empty string for all environments.
+Returns all secrets visible to the authenticated user, filtered by environment name
+across every project. Pass empty string for all environments. An environment name
+is only unique *within* a project, not globally — see `ListSecretsInProject` below
+if you need to scope to one specific project.
+
+### `client.ListSecretsInProject(ctx, projectID uint, environment string) ([]Secret, error)`
+Returns secrets in a single project, optionally filtered to one environment within
+it by name. Resolves the environment name to its numeric ID within that project
+before querying, so it never confuses a same-named environment (or secret) in a
+different project.
+
+### `client.GetSecretInProject(ctx, projectID uint, name, environment string) (string, error)`
+The project-scoped counterpart to `GetSecret`.
+
+### `client.ListProjects(ctx) ([]Project, error)`
+Returns all projects visible to the authenticated user.
+
+### `client.ListEnvironments(ctx, projectID uint) ([]Environment, error)`
+Returns all environments for a project.
 
 ### `client.Health(ctx) error`
 Checks if the server is reachable. Returns nil if healthy.

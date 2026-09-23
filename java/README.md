@@ -43,8 +43,11 @@ String dbPassword = client.getSecret("db-password", "production");
 
 - Keyorix.login(serverUrl, username, password) -> String
 - Keyorix.newClient(serverUrl, token) -> KeyorixClient
-- client.getSecret(name, environment) -> String
-- client.listSecrets(environment) -> List<Secret>
+- client.getSecret(name, environment) -> String — `environment` is matched by name
+  across every project you can read; if the same environment name exists in more
+  than one project, which same-named secret is returned is unspecified (this
+  client has no project-scoped listing yet)
+- client.listSecrets(environment) -> List<Secret> — same caveat as above
 - client.health() -> boolean
 
 ## Exceptions

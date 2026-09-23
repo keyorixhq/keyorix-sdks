@@ -185,6 +185,12 @@ func Login(ctx context.Context, serverURL, username, password string) (string, e
 
 // GetSecret retrieves the value of a secret by name and environment.
 // Returns the plaintext secret value.
+//
+// environment is matched against every project the caller can read, since
+// this method has no project scope of its own — if the SAME environment name
+// (e.g. "production") exists in more than one project and both contain a
+// same-named secret, which one is returned is unspecified. Use
+// GetSecretInProject to disambiguate.
 func (c *Client) GetSecret(ctx context.Context, name, environment string) (string, error) {
 	secrets, err := c.ListSecrets(ctx, environment)
 	if err != nil {
@@ -201,13 +207,90 @@ func (c *Client) GetSecret(ctx context.Context, name, environment string) (strin
 }
 
 // ListSecrets returns all secrets visible to the authenticated user.
-// Pass environment as "production", "staging", or "development".
-// Pass empty string to list all environments.
+// Pass environment as "production", "staging", or "development" to filter to
+// that environment BY NAME, across every project the caller can read. Pass
+// empty string to list all environments.
+//
+// An environment name is only unique WITHIN a project, not globally — if two
+// projects both have a "production" environment, this filters to secrets in
+// EITHER of them. Use ListSecretsInProject when you need to scope to one
+// specific project as well.
+//
+// The server only recognizes project_id/environment_id (numeric) as real
+// filters — a bare `environment` name query parameter is rejected with 400.
+// This method filters by name CLIENT-SIDE, after fetching the caller's full
+// (unscoped) secret list, so the environment argument's documented behavior
+// actually works, instead of previously being silently ignored server-side.
 func (c *Client) ListSecrets(ctx context.Context, environment string) ([]Secret, error) {
-	endpoint := c.baseURL + "/api/v1/secrets"
-	if environment != "" {
-		endpoint += "?environment=" + url.QueryEscape(environment)
+	secrets, err := c.listSecretsRaw(ctx, "")
+	if err != nil {
+		return nil, err
 	}
+	if environment == "" {
+		return secrets, nil
+	}
+	filtered := make([]Secret, 0, len(secrets))
+	for _, s := range secrets {
+		if s.Environment == environment {
+			filtered = append(filtered, s)
+		}
+	}
+	return filtered, nil
+}
+
+// GetSecretInProject retrieves the value of a secret by name, scoped to one
+// project and (optionally) one environment within it — the disambiguated
+// counterpart to GetSecret for deployments where the same environment name
+// (or secret name) recurs across projects.
+func (c *Client) GetSecretInProject(ctx context.Context, projectID uint, name, environment string) (string, error) {
+	secrets, err := c.ListSecretsInProject(ctx, projectID, environment)
+	if err != nil {
+		return "", err
+	}
+
+	for _, s := range secrets {
+		if s.Name == name {
+			return c.getSecretValue(ctx, s.ID)
+		}
+	}
+
+	return "", fmt.Errorf("keyorix: secret %q not found in project %d, environment %q", name, projectID, environment)
+}
+
+// ListSecretsInProject returns secrets in a single project, optionally
+// filtered to one environment within it (by name). Unlike ListSecrets, this
+// resolves environment to the numeric environment_id THE SERVER ACTUALLY
+// HONORS, scoped by project_id — so it never confuses a same-named
+// environment/secret in a different project the way name-only filtering can.
+func (c *Client) ListSecretsInProject(ctx context.Context, projectID uint, environment string) ([]Secret, error) {
+	query := url.Values{}
+	query.Set("project_id", fmt.Sprintf("%d", projectID))
+	if environment != "" {
+		envs, err := c.ListEnvironments(ctx, projectID)
+		if err != nil {
+			return nil, err
+		}
+		envID, found := uint(0), false
+		for _, e := range envs {
+			if e.Name == environment {
+				envID, found = e.ID, true
+				break
+			}
+		}
+		if !found {
+			return nil, fmt.Errorf("keyorix: environment %q not found in project %d", environment, projectID)
+		}
+		query.Set("environment_id", fmt.Sprintf("%d", envID))
+	}
+	return c.listSecretsRaw(ctx, "?"+query.Encode())
+}
+
+// listSecretsRaw performs the underlying GET /api/v1/secrets request with the
+// given raw query suffix (including the leading "?", or empty for none) and
+// decodes the response. No environment/project filtering happens here — that
+// is ListSecrets' and ListSecretsInProject's job.
+func (c *Client) listSecretsRaw(ctx context.Context, rawQuery string) ([]Secret, error) {
+	endpoint := c.baseURL + "/api/v1/secrets" + rawQuery
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {

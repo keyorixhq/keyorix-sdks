@@ -31,8 +31,16 @@ Zero dependencies — stdlib only. Or just copy keyorix.py into your project.
 
 - keyorix.login(server_url, username, password) -> str
 - keyorix.Client(server_url, token, timeout=30)
-- client.get_secret(name, environment="") -> str
-- client.list_secrets(environment="") -> list
+- client.get_secret(name, environment="") -> str — matches `environment` by name across
+  every project you can read; use `get_secret_in_project` if the same environment name
+  exists in more than one project
+- client.list_secrets(environment="") -> list — same caveat as above; see
+  `list_secrets_in_project` to scope to one specific project
+- client.list_secrets_in_project(project_id, environment="") -> list — resolves
+  `environment` to its numeric ID within `project_id` before querying
+- client.get_secret_in_project(project_id, name, environment="") -> str
+- client.list_projects() -> list
+- client.list_environments(project_id) -> list
 - client.health() -> bool
 
 ## Exceptions

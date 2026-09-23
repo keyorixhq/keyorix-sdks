@@ -205,14 +205,10 @@ class Client {
     }
   }
 
-  /**
-   * List secrets visible to the authenticated user.
-   * @param {string} [environment] - Filter by environment name
-   * @returns {Promise<Array>}
-   */
-  async listSecrets(environment = '') {
+  async _listSecretsRaw(query) {
     let path = '/api/v1/secrets';
-    if (environment) path += `?environment=${encodeURIComponent(environment)}`;
+    const qs = new URLSearchParams(query).toString();
+    if (qs) path += `?${qs}`;
     const data = await this._request(path);
     return (data?.data?.secrets || []).map((s) => ({
       id: s.ID,
@@ -225,7 +221,36 @@ class Client {
   }
 
   /**
-   * Get the value of a secret by name.
+   * List secrets visible to the authenticated user, filtered by environment
+   * name across every project you can read.
+   *
+   * An environment name is only unique WITHIN a project, not globally -- if
+   * two projects both have a "production" environment, this filters to
+   * secrets in EITHER of them. Use listSecretsInProject to scope to one
+   * specific project as well.
+   *
+   * The server only recognizes project_id/environment_id (numeric) as real
+   * filters -- a bare `environment` name query parameter is rejected with
+   * 400. This method filters by name CLIENT-SIDE, after fetching the
+   * caller's full (unscoped) secret list, so the environment argument's
+   * documented behavior actually works, instead of previously being
+   * silently ignored server-side.
+   *
+   * @param {string} [environment] - Filter by environment name
+   * @returns {Promise<Array>}
+   */
+  async listSecrets(environment = '') {
+    const secrets = await this._listSecretsRaw({});
+    if (!environment) return secrets;
+    return secrets.filter((s) => s.environment === environment);
+  }
+
+  /**
+   * Get the value of a secret by name. environment is matched by name
+   * across every project you can read -- if the SAME environment name
+   * exists in more than one project and both contain a same-named secret,
+   * which one is returned is unspecified. Use getSecretInProject to
+   * disambiguate.
    * @param {string} name - Secret name
    * @param {string} [environment] - Environment to search in
    * @returns {Promise<string>} Plaintext secret value
@@ -236,6 +261,50 @@ class Client {
     if (!secret) {
       const envMsg = environment ? ` in environment '${environment}'` : '';
       throw new SecretNotFoundError(`Secret '${name}' not found${envMsg}`);
+    }
+    return this._getSecretValue(secret.id);
+  }
+
+  /**
+   * List secrets in a single project, optionally filtered to one
+   * environment within it (by name). Unlike listSecrets, this resolves
+   * environment to the numeric environment_id the server actually honors,
+   * scoped by project_id -- so it never confuses a same-named
+   * environment/secret in a different project the way name-only filtering
+   * can.
+   * @param {number} projectId
+   * @param {string} [environment] - Environment name within that project
+   * @returns {Promise<Array>}
+   */
+  async listSecretsInProject(projectId, environment = '') {
+    const query = { project_id: String(projectId) };
+    if (environment) {
+      const envs = await this.listEnvironments(projectId);
+      const env = envs.find((e) => e.name === environment);
+      if (!env) {
+        throw new KeyorixError(`environment '${environment}' not found in project ${projectId}`);
+      }
+      query.environment_id = String(env.id);
+    }
+    return this._listSecretsRaw(query);
+  }
+
+  /**
+   * Get the value of a secret by name, scoped to one project and
+   * (optionally) one environment within it -- the disambiguated
+   * counterpart to getSecret for deployments where the same environment
+   * name (or secret name) recurs across projects.
+   * @param {number} projectId
+   * @param {string} name - Secret name
+   * @param {string} [environment] - Environment name within that project
+   * @returns {Promise<string>} Plaintext secret value
+   */
+  async getSecretInProject(projectId, name, environment = '') {
+    const secrets = await this.listSecretsInProject(projectId, environment);
+    const secret = secrets.find((s) => s.name === name);
+    if (!secret) {
+      const envMsg = environment ? `, environment '${environment}'` : '';
+      throw new SecretNotFoundError(`Secret '${name}' not found in project ${projectId}${envMsg}`);
     }
     return this._getSecretValue(secret.id);
   }

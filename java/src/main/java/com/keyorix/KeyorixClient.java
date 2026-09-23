@@ -6,9 +6,9 @@ import java.net.HttpURLConnection;
 import java.net.URI;
 import java.net.URISyntaxException;
 import java.net.URL;
-import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.List;
 
 /**
@@ -91,6 +91,12 @@ public class KeyorixClient {
     /**
      * Returns the plaintext value of a secret by name and environment.
      *
+     * <p>environment is matched by name across every project the caller can
+     * read, since this client has no project-scoped listing today — if the
+     * SAME environment name (e.g. "production") exists in more than one
+     * project and both contain a same-named secret, which one is returned is
+     * unspecified.
+     *
      * @param name        Secret name
      * @param environment Environment name ("production", "staging", "development")
      * @return Plaintext secret value
@@ -109,19 +115,37 @@ public class KeyorixClient {
     }
 
     /**
-     * Lists all secrets visible to the authenticated user.
+     * Lists all secrets visible to the authenticated user, filtered by
+     * environment name across every project.
+     *
+     * <p>An environment name is only unique WITHIN a project, not globally —
+     * if two projects both have a "production" environment, this filters to
+     * secrets in EITHER of them.
+     *
+     * <p>The server only recognizes {@code project_id}/{@code environment_id}
+     * (numeric) as real filters — a bare {@code environment} name query
+     * parameter is rejected with 400. This method filters by name
+     * CLIENT-SIDE, after fetching the caller's full (unscoped) secret list,
+     * so the {@code environment} argument's documented behavior actually
+     * works, instead of previously being silently ignored server-side.
      *
      * @param environment Filter by environment name, or null/empty for all environments
      * @return List of secrets
      * @throws KeyorixException if an API error occurs
      */
     public List<Secret> listSecrets(String environment) throws KeyorixException {
-        String path = SECRETS_PATH;
-        if (environment != null && !environment.isEmpty()) {
-            path += "?environment=" + URLEncoder.encode(environment, StandardCharsets.UTF_8);
+        String response = get(SECRETS_PATH);
+        List<Secret> secrets = JsonParser.parseSecretList(response);
+        if (environment == null || environment.isEmpty()) {
+            return secrets;
         }
-        String response = get(path);
-        return JsonParser.parseSecretList(response);
+        List<Secret> filtered = new ArrayList<>();
+        for (Secret s : secrets) {
+            if (environment.equals(s.getEnvironment())) {
+                filtered.add(s);
+            }
+        }
+        return filtered;
     }
 
     /**

@@ -3,9 +3,16 @@
 import io
 import unittest
 import urllib.error
-from unittest.mock import patch
+from unittest.mock import patch, MagicMock
 import json
 import keyorix
+
+
+def _mock_response(payload: dict) -> MagicMock:
+    resp = MagicMock()
+    resp.read.return_value = json.dumps(payload).encode()
+    resp.__enter__.return_value = resp
+    return resp
 
 
 class TestClient(unittest.TestCase):
@@ -87,6 +94,94 @@ class TestClient(unittest.TestCase):
         self.assertNotIn(raw, str(ctx.exception))
         self.assertEqual(ctx.exception.response_body, raw)
         self.assertEqual(ctx.exception.status_code, 500)
+
+    @patch("keyorix.urllib.request.urlopen")
+    def test_list_secrets_never_sends_environment_query_param_filters_client_side(self, mock_urlopen):
+        # keyorix-sdks#35: the server now returns 400 for a bare `environment`
+        # name query parameter (keyorix#2013), so list_secrets must never send
+        # it, and must instead filter the (unscoped) response client-side by
+        # the environment_name field every secret already carries.
+        mock_urlopen.return_value = _mock_response({
+            "data": {"secrets": [
+                {"ID": 1, "Name": "db-pass", "Type": "password", "ProjectID": 1,
+                 "environment_name": "production", "CreatedAt": "2026-01-01T00:00:00Z"},
+                {"ID": 2, "Name": "api-key", "Type": "generic", "ProjectID": 1,
+                 "environment_name": "staging", "CreatedAt": "2026-01-01T00:00:00Z"},
+            ]}
+        })
+
+        client = keyorix.Client("http://localhost:8080", "test-token")
+        secrets = client.list_secrets("production")
+
+        self.assertEqual(len(secrets), 1)
+        self.assertEqual(secrets[0].name, "db-pass")
+
+        sent_req = mock_urlopen.call_args[0][0]
+        self.assertNotIn("environment=", sent_req.full_url)
+
+        mock_urlopen.reset_mock()
+        mock_urlopen.return_value = _mock_response({
+            "data": {"secrets": [
+                {"ID": 1, "Name": "db-pass", "Type": "password", "ProjectID": 1,
+                 "environment_name": "production", "CreatedAt": "2026-01-01T00:00:00Z"},
+                {"ID": 2, "Name": "api-key", "Type": "generic", "ProjectID": 1,
+                 "environment_name": "staging", "CreatedAt": "2026-01-01T00:00:00Z"},
+            ]}
+        })
+        all_secrets = client.list_secrets()
+        self.assertEqual(len(all_secrets), 2)
+
+    @patch("keyorix.urllib.request.urlopen")
+    def test_list_secrets_in_project_resolves_environment_name_to_id(self, mock_urlopen):
+        def side_effect(req, timeout=None):
+            if "/environments" in req.full_url:
+                return _mock_response({"data": {"environments": [
+                    {"ID": 7, "ProjectID": 1, "Name": "production"}
+                ]}})
+            return _mock_response({"data": {"secrets": [
+                {"ID": 42, "Name": "db-pass", "Type": "password", "ProjectID": 1,
+                 "environment_name": "production", "CreatedAt": "2026-01-01T00:00:00Z"}
+            ]}})
+        mock_urlopen.side_effect = side_effect
+
+        client = keyorix.Client("http://localhost:8080", "test-token")
+        secrets = client.list_secrets_in_project(1, "production")
+
+        self.assertEqual(len(secrets), 1)
+        self.assertEqual(secrets[0].name, "db-pass")
+
+        secrets_calls = [c for c in mock_urlopen.call_args_list if "/api/v1/secrets?" in c[0][0].full_url]
+        self.assertEqual(len(secrets_calls), 1)
+        url = secrets_calls[0][0][0].full_url
+        self.assertIn("project_id=1", url)
+        self.assertIn("environment_id=7", url)
+        self.assertNotIn("environment=production", url)
+
+    @patch("keyorix.urllib.request.urlopen")
+    def test_list_secrets_in_project_unknown_environment_raises(self, mock_urlopen):
+        mock_urlopen.return_value = _mock_response({"data": {"environments": []}})
+        client = keyorix.Client("http://localhost:8080", "test-token")
+        with self.assertRaises(keyorix.KeyorixError):
+            client.list_secrets_in_project(1, "nonexistent-env")
+
+    @patch("keyorix.urllib.request.urlopen")
+    def test_get_secret_in_project_happy_path(self, mock_urlopen):
+        def side_effect(req, timeout=None):
+            if "/environments" in req.full_url:
+                return _mock_response({"data": {"environments": [
+                    {"ID": 7, "ProjectID": 1, "Name": "production"}
+                ]}})
+            if "include_value=true" in req.full_url:
+                return _mock_response({"data": {"value": "s3cr3t"}})
+            return _mock_response({"data": {"secrets": [
+                {"ID": 42, "Name": "db-pass", "Type": "password", "ProjectID": 1,
+                 "environment_name": "production", "CreatedAt": "2026-01-01T00:00:00Z"}
+            ]}})
+        mock_urlopen.side_effect = side_effect
+
+        client = keyorix.Client("http://localhost:8080", "test-token")
+        value = client.get_secret_in_project(1, "db-pass", "production")
+        self.assertEqual(value, "s3cr3t")
 
 
 if __name__ == "__main__":

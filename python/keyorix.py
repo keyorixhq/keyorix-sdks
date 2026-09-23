@@ -237,29 +237,53 @@ class Client:
         except urllib.error.URLError as e:
             raise KeyorixError(f"Server unreachable: {e}") from e
 
+    def _list_secrets_raw(self, query: dict) -> List[Secret]:
+        path = "/api/v1/secrets"
+        if query:
+            path += f"?{urllib.parse.urlencode(query)}"
+        data = self._request("GET", path)
+        secrets_data = data.get("data", {}).get("secrets", [])
+        return [Secret._from_dict(s) for s in secrets_data]
+
     def list_secrets(self, environment: str = "") -> List[Secret]:
         """List secrets visible to the authenticated user.
 
         Args:
-            environment: Filter by environment ("production", "staging", "development").
+            environment: Filter by environment name ("production", "staging",
+                         "development"), across every project you can read.
                          Pass empty string for all environments.
 
         Returns:
             List of Secret objects
+
+        Note:
+            An environment name is only unique WITHIN a project, not globally
+            -- if two projects both have a "production" environment, this
+            filters to secrets in EITHER of them. Use list_secrets_in_project
+            to scope to one specific project as well.
+
+            The server only recognizes project_id/environment_id (numeric) as
+            real filters -- a bare `environment` name query parameter is
+            rejected with 400. This method filters by name CLIENT-SIDE, after
+            fetching the caller's full (unscoped) secret list, so the
+            environment argument's documented behavior actually works,
+            instead of previously being silently ignored server-side.
         """
-        path = "/api/v1/secrets"
-        if environment:
-            path += f"?environment={urllib.parse.quote(environment)}"
-        data = self._request("GET", path)
-        secrets_data = data.get("data", {}).get("secrets", [])
-        return [Secret._from_dict(s) for s in secrets_data]
+        secrets = self._list_secrets_raw({})
+        if not environment:
+            return secrets
+        return [s for s in secrets if s.environment == environment]
 
     def get_secret(self, name: str, environment: str = "") -> str:
         """Get the value of a secret by name.
 
         Args:
             name: Secret name
-            environment: Environment to search in ("production", "staging", "development")
+            environment: Environment to search in ("production", "staging", "development"),
+                         matched across every project you can read -- if the SAME
+                         environment name exists in more than one project and both
+                         contain a same-named secret, which one is returned is
+                         unspecified. Use get_secret_in_project to disambiguate.
 
         Returns:
             Plaintext secret value
@@ -274,6 +298,55 @@ class Client:
                 return self._get_secret_value(secret.id)
         env_msg = f" in environment {environment!r}" if environment else ""
         raise SecretNotFoundError(f"Secret {name!r} not found{env_msg}")
+
+    def list_secrets_in_project(self, project_id: int, environment: str = "") -> List[Secret]:
+        """List secrets in a single project, optionally filtered to one
+        environment within it (by name).
+
+        Unlike list_secrets, this resolves environment to the numeric
+        environment_id the server actually honors, scoped by project_id -- so
+        it never confuses a same-named environment/secret in a different
+        project the way name-only filtering can.
+
+        Args:
+            project_id: ID of the project to scope to
+            environment: Environment name within that project, or empty for all
+
+        Returns:
+            List of Secret objects
+
+        Raises:
+            KeyorixError: If environment is non-empty and no environment with
+                          that name exists in the given project
+        """
+        query = {"project_id": project_id}
+        if environment:
+            env_id = None
+            for env in self.list_environments(project_id):
+                if env.name == environment:
+                    env_id = env.id
+                    break
+            if env_id is None:
+                raise KeyorixError(f"environment {environment!r} not found in project {project_id}")
+            query["environment_id"] = env_id
+        return self._list_secrets_raw(query)
+
+    def get_secret_in_project(self, project_id: int, name: str, environment: str = "") -> str:
+        """Get the value of a secret by name, scoped to one project and
+        (optionally) one environment within it -- the disambiguated
+        counterpart to get_secret for deployments where the same environment
+        name (or secret name) recurs across projects.
+
+        Raises:
+            SecretNotFoundError: If secret is not found
+            KeyorixError: On other errors
+        """
+        secrets = self.list_secrets_in_project(project_id, environment)
+        for secret in secrets:
+            if secret.name == name:
+                return self._get_secret_value(secret.id)
+        env_msg = f", environment {environment!r}" if environment else ""
+        raise SecretNotFoundError(f"Secret {name!r} not found in project {project_id}{env_msg}")
 
     def _get_secret_value(self, secret_id: int) -> str:
         data = self._request("GET", f"/api/v1/secrets/{secret_id}?include_value=true")
