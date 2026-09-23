@@ -70,7 +70,7 @@ class KeyorixClientTest {
     }
 
     @Test
-    void testGet_redactsBodyFromMessage() throws IOException, KeyorixException {
+    void testGetScoped_redactsBodyFromMessage() throws IOException, KeyorixException {
         String raw = "internal: secret_key=super-sensitive-detail";
         HttpServer server = HttpServer.create(new InetSocketAddress("localhost", 0), 0);
         server.createContext("/api/v1/secrets", exchange -> {
@@ -83,10 +83,52 @@ class KeyorixClientTest {
         server.start();
         try {
             KeyorixClient client = new KeyorixClient("http://localhost:" + server.getAddress().getPort(), "test-token");
-            KeyorixException ex = assertThrows(KeyorixException.class, () -> client.listSecrets(null));
+            KeyorixException ex = assertThrows(KeyorixException.class, () -> client.listSecretsScoped(1L, 1L));
             assertFalse(ex.getMessage().contains(raw), "message must not leak the raw response body");
             assertEquals(raw, ex.getResponseBody());
             assertEquals(500, ex.getStatusCode());
+        } finally {
+            server.stop(0);
+        }
+    }
+
+    // ── Deprecated environment-only methods: removed since v0.3.0 ──────────────
+
+    @Test
+    void testListSecrets_deprecated_neverCallsServer() throws IOException, KeyorixException {
+        HttpServer server = HttpServer.create(new InetSocketAddress("localhost", 0), 0);
+        boolean[] called = { false };
+        server.createContext("/", exchange -> {
+            called[0] = true;
+            exchange.sendResponseHeaders(200, 0);
+            exchange.close();
+        });
+        server.start();
+        try {
+            KeyorixClient client = new KeyorixClient("http://localhost:" + server.getAddress().getPort(), "test-token");
+            KeyorixException ex = assertThrows(KeyorixException.class, () -> client.listSecrets("production"));
+            assertTrue(ex.getMessage().contains("listSecretsScoped"));
+            assertFalse(called[0], "listSecrets must not contact the server");
+        } finally {
+            server.stop(0);
+        }
+    }
+
+    @Test
+    void testGetSecret_deprecated_neverCallsServer() throws IOException, KeyorixException {
+        HttpServer server = HttpServer.create(new InetSocketAddress("localhost", 0), 0);
+        boolean[] called = { false };
+        server.createContext("/", exchange -> {
+            called[0] = true;
+            exchange.sendResponseHeaders(200, 0);
+            exchange.close();
+        });
+        server.start();
+        try {
+            KeyorixClient client = new KeyorixClient("http://localhost:" + server.getAddress().getPort(), "test-token");
+            KeyorixException ex = assertThrows(KeyorixException.class, () -> client.getSecret("db-password", "production"));
+            assertTrue(ex.getMessage().contains("getSecretScoped"));
+            assertFalse(called[0], "getSecret must not contact the server");
         } finally {
             server.stop(0);
         }

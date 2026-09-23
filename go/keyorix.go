@@ -16,6 +16,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -26,6 +27,15 @@ type Client struct {
 	baseURL    string
 	token      string
 	httpClient *http.Client
+
+	// cacheMu guards projectCache/envCache. Populated lazily by
+	// resolveProject/resolveEnvironment and never invalidated for the
+	// lifetime of the Client — a project/environment rename mid-process is
+	// expected to be rare enough that a fresh Client is the right way to
+	// pick it up, not a cache-expiry policy.
+	cacheMu      sync.RWMutex
+	projectCache map[string]uint          // lowercased project name -> ID
+	envCache     map[uint]map[string]uint // project ID -> lowercased environment name -> ID
 }
 
 // Secret represents a secret returned by the API.
@@ -72,6 +82,80 @@ type APIError struct {
 
 func (e *APIError) Error() string {
 	return fmt.Sprintf("keyorix: server returned %d", e.StatusCode)
+}
+
+// SecretNotFoundError is returned by GetSecretScoped when no secret in the
+// given project+environment scope has the requested name.
+type SecretNotFoundError struct {
+	Name        string
+	ProjectRef  ProjectRef
+	Environment EnvironmentRef
+}
+
+func (e *SecretNotFoundError) Error() string {
+	return fmt.Sprintf("keyorix: secret %q not found in project %s, environment %s", e.Name, e.ProjectRef, e.Environment)
+}
+
+// AmbiguousSecretError is returned by GetSecretScoped when more than one
+// secret in the given project+environment scope has the requested name.
+// GetSecretScoped never guesses which one was meant — IDs lists every match
+// so the caller can disambiguate (e.g. via ListSecretsScoped).
+type AmbiguousSecretError struct {
+	Name        string
+	ProjectRef  ProjectRef
+	Environment EnvironmentRef
+	IDs         []uint
+}
+
+func (e *AmbiguousSecretError) Error() string {
+	return fmt.Sprintf("keyorix: secret %q is ambiguous in project %s, environment %s: matches IDs %v", e.Name, e.ProjectRef, e.Environment, e.IDs)
+}
+
+// ProjectRef identifies a project by name or by numeric ID. Construct one
+// with ProjectByName or ProjectByID.
+type ProjectRef struct {
+	name string
+	id   uint
+	byID bool
+}
+
+// ProjectByName references a project by name, resolved to an ID (and cached)
+// on first use.
+func ProjectByName(name string) ProjectRef { return ProjectRef{name: name} }
+
+// ProjectByID references a project directly by its numeric ID — no
+// resolution round trip is made.
+func ProjectByID(id uint) ProjectRef { return ProjectRef{id: id, byID: true} }
+
+func (r ProjectRef) String() string {
+	if r.byID {
+		return fmt.Sprintf("id=%d", r.id)
+	}
+	return fmt.Sprintf("name=%q", r.name)
+}
+
+// EnvironmentRef identifies an environment (within some project) by name or
+// by numeric ID. Construct one with EnvironmentByName or EnvironmentByID.
+type EnvironmentRef struct {
+	name string
+	id   uint
+	byID bool
+}
+
+// EnvironmentByName references an environment by name, resolved to an ID
+// (and cached) on first use — scoped to whatever project it's resolved
+// against, since environment names are unique per project, not globally.
+func EnvironmentByName(name string) EnvironmentRef { return EnvironmentRef{name: name} }
+
+// EnvironmentByID references an environment directly by its numeric ID — no
+// resolution round trip is made.
+func EnvironmentByID(id uint) EnvironmentRef { return EnvironmentRef{id: id, byID: true} }
+
+func (r EnvironmentRef) String() string {
+	if r.byID {
+		return fmt.Sprintf("id=%d", r.id)
+	}
+	return fmt.Sprintf("name=%q", r.name)
 }
 
 // Option configures the client.
@@ -183,32 +267,74 @@ func Login(ctx context.Context, serverURL, username, password string) (string, e
 	return result.Data.Token, nil
 }
 
-// GetSecret retrieves the value of a secret by name and environment.
-// Returns the plaintext secret value.
-func (c *Client) GetSecret(ctx context.Context, name, environment string) (string, error) {
-	secrets, err := c.ListSecrets(ctx, environment)
+// GetSecret is deprecated: an environment name is only unique within one
+// project, not globally, so scoping by environment alone can silently
+// resolve to another project's same-named secret. Removed in
+// keyorix-sdks v0.3.0 — this now always returns an error without ever
+// contacting the server (no silent fallback to the old, unscoped behavior).
+//
+// Deprecated: use GetSecretScoped(ctx, name, project, environment) instead.
+func (c *Client) GetSecret(_ context.Context, _, _ string) (string, error) {
+	return "", fmt.Errorf("keyorix: GetSecret(ctx, name, environment) was removed in keyorix-sdks v0.3.0 (an environment name is only unique within one project, not globally) — use GetSecretScoped(ctx, name, project, environment) instead")
+}
+
+// ListSecrets is deprecated: an environment name is only unique within one
+// project, not globally, so scoping by environment alone can silently
+// return secrets from every project the caller can read. Removed in
+// keyorix-sdks v0.3.0 — this now always returns an error without ever
+// contacting the server (no silent fallback to the old, unscoped behavior).
+//
+// Deprecated: use ListSecretsScoped(ctx, project, environment) instead.
+func (c *Client) ListSecrets(_ context.Context, _ string) ([]Secret, error) {
+	return nil, fmt.Errorf("keyorix: ListSecrets(ctx, environment) was removed in keyorix-sdks v0.3.0 (an environment name is only unique within one project, not globally) — use ListSecretsScoped(ctx, project, environment) instead")
+}
+
+// GetSecretScoped returns the plaintext value of the secret named name
+// within project+environment. name is matched exactly (case-sensitive)
+// among the secrets in that scope.
+//
+// Returns *SecretNotFoundError if no secret in scope has that name, or
+// *AmbiguousSecretError if more than one does — it never guesses.
+func (c *Client) GetSecretScoped(ctx context.Context, name string, project ProjectRef, environment EnvironmentRef) (string, error) {
+	secrets, err := c.ListSecretsScoped(ctx, project, environment)
 	if err != nil {
 		return "", err
 	}
 
+	var matches []Secret
 	for _, s := range secrets {
 		if s.Name == name {
-			return c.getSecretValue(ctx, s.ID)
+			matches = append(matches, s)
 		}
 	}
-
-	return "", fmt.Errorf("keyorix: secret %q not found in environment %q", name, environment)
+	switch len(matches) {
+	case 0:
+		return "", &SecretNotFoundError{Name: name, ProjectRef: project, Environment: environment}
+	case 1:
+		return c.getSecretValue(ctx, matches[0].ID)
+	default:
+		ids := make([]uint, len(matches))
+		for i, m := range matches {
+			ids[i] = m.ID
+		}
+		return "", &AmbiguousSecretError{Name: name, ProjectRef: project, Environment: environment, IDs: ids}
+	}
 }
 
-// ListSecrets returns all secrets visible to the authenticated user.
-// Pass environment as "production", "staging", or "development".
-// Pass empty string to list all environments.
-func (c *Client) ListSecrets(ctx context.Context, environment string) ([]Secret, error) {
-	endpoint := c.baseURL + "/api/v1/secrets"
-	if environment != "" {
-		endpoint += "?environment=" + url.QueryEscape(environment)
+// ListSecretsScoped returns every secret within project+environment visible
+// to the authenticated user. project and environment may each be given by
+// name (resolved to an ID and cached on this Client) or by ID directly.
+func (c *Client) ListSecretsScoped(ctx context.Context, project ProjectRef, environment EnvironmentRef) ([]Secret, error) {
+	projectID, err := c.resolveProject(ctx, project)
+	if err != nil {
+		return nil, err
+	}
+	envID, err := c.resolveEnvironment(ctx, projectID, environment)
+	if err != nil {
+		return nil, err
 	}
 
+	endpoint := fmt.Sprintf("%s/api/v1/secrets?project_id=%d&environment_id=%d", c.baseURL, projectID, envID)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
 		return nil, fmt.Errorf("keyorix: failed to create request: %w", err)
@@ -239,6 +365,87 @@ func (c *Client) ListSecrets(ctx context.Context, environment string) ([]Secret,
 	}
 
 	return result.Data.Secrets, nil
+}
+
+// resolveProject resolves ref to a project ID, using (and populating) the
+// Client's cache when ref is given by name. An ID ref resolves with no
+// network call.
+func (c *Client) resolveProject(ctx context.Context, ref ProjectRef) (uint, error) {
+	if ref.byID {
+		return ref.id, nil
+	}
+	key := strings.ToLower(ref.name)
+
+	c.cacheMu.RLock()
+	if id, ok := c.projectCache[key]; ok {
+		c.cacheMu.RUnlock()
+		return id, nil
+	}
+	c.cacheMu.RUnlock()
+
+	projects, err := c.ListProjects(ctx)
+	if err != nil {
+		return 0, err
+	}
+
+	c.cacheMu.Lock()
+	if c.projectCache == nil {
+		c.projectCache = make(map[string]uint, len(projects))
+	}
+	for _, p := range projects {
+		c.projectCache[strings.ToLower(p.Name)] = p.ID
+	}
+	id, ok := c.projectCache[key]
+	c.cacheMu.Unlock()
+
+	if !ok {
+		return 0, fmt.Errorf("keyorix: project %q not found", ref.name)
+	}
+	return id, nil
+}
+
+// resolveEnvironment resolves ref to an environment ID within projectID,
+// using (and populating) the Client's per-project cache when ref is given
+// by name. An ID ref resolves with no network call.
+func (c *Client) resolveEnvironment(ctx context.Context, projectID uint, ref EnvironmentRef) (uint, error) {
+	if ref.byID {
+		return ref.id, nil
+	}
+	key := strings.ToLower(ref.name)
+
+	c.cacheMu.RLock()
+	if envs, ok := c.envCache[projectID]; ok {
+		if id, ok := envs[key]; ok {
+			c.cacheMu.RUnlock()
+			return id, nil
+		}
+	}
+	c.cacheMu.RUnlock()
+
+	envs, err := c.ListEnvironments(ctx, projectID)
+	if err != nil {
+		return 0, err
+	}
+
+	c.cacheMu.Lock()
+	if c.envCache == nil {
+		c.envCache = make(map[uint]map[string]uint)
+	}
+	byName := c.envCache[projectID]
+	if byName == nil {
+		byName = make(map[string]uint, len(envs))
+		c.envCache[projectID] = byName
+	}
+	for _, e := range envs {
+		byName[strings.ToLower(e.Name)] = e.ID
+	}
+	id, ok := byName[key]
+	c.cacheMu.Unlock()
+
+	if !ok {
+		return 0, fmt.Errorf("keyorix: environment %q not found in project id=%d", ref.name, projectID)
+	}
+	return id, nil
 }
 
 // getSecretValue fetches the decrypted value for a secret by ID.

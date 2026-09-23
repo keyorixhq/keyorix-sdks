@@ -83,10 +83,28 @@ class TestClient(unittest.TestCase):
         )
         client = keyorix.Client("http://localhost:8080", "test-token")
         with self.assertRaises(keyorix.KeyorixError) as ctx:
-            client.list_secrets()
+            client._request("GET", "/api/v1/secrets")
         self.assertNotIn(raw, str(ctx.exception))
         self.assertEqual(ctx.exception.response_body, raw)
         self.assertEqual(ctx.exception.status_code, 500)
+
+    # ── Deprecated environment-only methods: removed in v0.3.0 ─────────────────
+
+    @patch("keyorix.urllib.request.urlopen")
+    def test_list_secrets_deprecated_never_calls_server(self, mock_urlopen):
+        client = keyorix.Client("http://localhost:8080", "test-token")
+        with self.assertRaises(keyorix.KeyorixError) as ctx:
+            client.list_secrets("production")
+        self.assertIn("list_secrets_scoped", str(ctx.exception))
+        mock_urlopen.assert_not_called()
+
+    @patch("keyorix.urllib.request.urlopen")
+    def test_get_secret_deprecated_never_calls_server(self, mock_urlopen):
+        client = keyorix.Client("http://localhost:8080", "test-token")
+        with self.assertRaises(keyorix.KeyorixError) as ctx:
+            client.get_secret("db-password", "production")
+        self.assertIn("get_secret_scoped", str(ctx.exception))
+        mock_urlopen.assert_not_called()
 
 
 if __name__ == "__main__":

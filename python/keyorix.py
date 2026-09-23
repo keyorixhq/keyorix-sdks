@@ -12,11 +12,12 @@ Quick start:
     token = keyorix.login("https://your-server:8443", "admin", "password")
     client = keyorix.Client("https://your-server:8443", token)
 
-    # Get a secret
-    db_password = client.get_secret("db-password", "production")
+    # Get a secret -- scoped to a project + environment, since an environment
+    # name is only unique within one project, not globally.
+    db_password = client.get_secret_scoped("db-password", "my-project", "production")
 
     # List secrets
-    secrets = client.list_secrets("production")
+    secrets = client.list_secrets_scoped("my-project", "production")
 """
 
 import ipaddress
@@ -26,7 +27,7 @@ import urllib.parse
 import urllib.request
 from dataclasses import dataclass
 from datetime import datetime
-from typing import List, Optional
+from typing import Dict, List, Optional, Union
 
 
 class KeyorixError(Exception):
@@ -87,6 +88,17 @@ class SecretNotFoundError(KeyorixError):
     """Raised when a secret cannot be found."""
 
     pass
+
+
+class AmbiguousSecretError(KeyorixError):
+    """Raised when a secret name matches more than one secret within a
+    project+environment scope. Never guessed which one was meant — see the
+    ids attribute for every matching secret ID.
+    """
+
+    def __init__(self, message: str, *, ids: List[int]):
+        super().__init__(message)
+        self.ids = ids
 
 
 @dataclass
@@ -200,6 +212,12 @@ class Client:
         self._base = server_url.rstrip("/")
         self._token = token
         self._timeout = timeout
+        # Populated lazily by _resolve_project/_resolve_environment and never
+        # invalidated for the lifetime of this Client -- a project/environment
+        # rename mid-process is expected to be rare enough that a fresh
+        # Client is the right way to pick it up, not a cache-expiry policy.
+        self._project_cache: Dict[str, int] = {}  # lowercased name -> id
+        self._env_cache: Dict[int, Dict[str, int]] = {}  # project id -> lowercased name -> id
 
     def _request(self, method: str, path: str) -> dict:
         req = urllib.request.Request(
@@ -238,42 +256,121 @@ class Client:
             raise KeyorixError(f"Server unreachable: {e}") from e
 
     def list_secrets(self, environment: str = "") -> List[Secret]:
-        """List secrets visible to the authenticated user.
+        """Deprecated: removed in keyorix v0.3.0.
+
+        An environment name is only unique within one project, not globally,
+        so scoping by environment alone could silently return secrets from
+        every project the caller can read. Always raises without ever
+        contacting the server (no silent fallback to the old, unscoped
+        behavior) -- use list_secrets_scoped(project, environment) instead.
+        """
+        raise KeyorixError(
+            "list_secrets(environment) was removed in keyorix v0.3.0 (an environment "
+            "name is only unique within one project, not globally) -- use "
+            "list_secrets_scoped(project, environment) instead"
+        )
+
+    def get_secret(self, name: str, environment: str = "") -> str:
+        """Deprecated: removed in keyorix v0.3.0.
+
+        An environment name is only unique within one project, not globally,
+        so scoping by environment alone could silently resolve to another
+        project's same-named secret. Always raises without ever contacting
+        the server (no silent fallback to the old, unscoped behavior) -- use
+        get_secret_scoped(name, project, environment) instead.
+        """
+        raise KeyorixError(
+            "get_secret(name, environment) was removed in keyorix v0.3.0 (an environment "
+            "name is only unique within one project, not globally) -- use "
+            "get_secret_scoped(name, project, environment) instead"
+        )
+
+    def list_secrets_scoped(self, project: Union[str, int], environment: Union[str, int]) -> List[Secret]:
+        """List every secret within one project's environment.
 
         Args:
-            environment: Filter by environment ("production", "staging", "development").
-                         Pass empty string for all environments.
+            project: Project name (resolved to an ID and cached on this
+                     Client) or numeric project ID (no resolution round trip).
+            environment: Environment name (resolved within `project`, cached)
+                         or numeric environment ID.
 
         Returns:
             List of Secret objects
         """
-        path = "/api/v1/secrets"
-        if environment:
-            path += f"?environment={urllib.parse.quote(environment)}"
+        project_id = self._resolve_project(project)
+        env_id = self._resolve_environment(project_id, environment)
+        path = f"/api/v1/secrets?project_id={project_id}&environment_id={env_id}"
         data = self._request("GET", path)
         secrets_data = data.get("data", {}).get("secrets", [])
         return [Secret._from_dict(s) for s in secrets_data]
 
-    def get_secret(self, name: str, environment: str = "") -> str:
-        """Get the value of a secret by name.
+    def get_secret_scoped(
+        self, name: str, project: Union[str, int], environment: Union[str, int]
+    ) -> str:
+        """Get the value of the secret named `name` within one project's
+        environment. `name` is matched exactly (case-sensitive) among the
+        secrets in that scope.
 
         Args:
             name: Secret name
-            environment: Environment to search in ("production", "staging", "development")
+            project: Project name or numeric ID (see list_secrets_scoped)
+            environment: Environment name or numeric ID (see list_secrets_scoped)
 
         Returns:
             Plaintext secret value
 
         Raises:
-            SecretNotFoundError: If secret is not found
+            SecretNotFoundError: If no secret in scope has this name
+            AmbiguousSecretError: If more than one secret in scope has this
+                                   name -- never guessed; .ids lists every match
             KeyorixError: On other errors
         """
-        secrets = self.list_secrets(environment)
-        for secret in secrets:
-            if secret.name == name:
-                return self._get_secret_value(secret.id)
-        env_msg = f" in environment {environment!r}" if environment else ""
-        raise SecretNotFoundError(f"Secret {name!r} not found{env_msg}")
+        secrets = self.list_secrets_scoped(project, environment)
+        matches = [s for s in secrets if s.name == name]
+        if not matches:
+            raise SecretNotFoundError(
+                f"Secret {name!r} not found in project {project!r}, environment {environment!r}"
+            )
+        if len(matches) > 1:
+            ids = [s.id for s in matches]
+            raise AmbiguousSecretError(
+                f"Secret {name!r} is ambiguous in project {project!r}, environment "
+                f"{environment!r}: matches IDs {ids}",
+                ids=ids,
+            )
+        return self._get_secret_value(matches[0].id)
+
+    def _resolve_project(self, project: Union[str, int]) -> int:
+        """Resolve project to an ID. An int resolves with no network call; a
+        str is resolved via GET /api/v1/projects and cached (case-insensitive
+        match)."""
+        if isinstance(project, int):
+            return project
+        key = project.lower()
+        if key in self._project_cache:
+            return self._project_cache[key]
+        for p in self.list_projects():
+            self._project_cache[p.name.lower()] = p.id
+        if key not in self._project_cache:
+            raise KeyorixError(f"Project {project!r} not found")
+        return self._project_cache[key]
+
+    def _resolve_environment(self, project_id: int, environment: Union[str, int]) -> int:
+        """Resolve environment to an ID within project_id. An int resolves
+        with no network call; a str is resolved via the project-scoped
+        environments route and cached (case-insensitive match)."""
+        if isinstance(environment, int):
+            return environment
+        key = environment.lower()
+        cached = self._env_cache.get(project_id, {})
+        if key in cached:
+            return cached[key]
+        by_name = self._env_cache.setdefault(project_id, {})
+        for e in self.list_environments(project_id):
+            by_name[e.name.lower()] = e.id
+        if key not in by_name:
+            raise KeyorixError(f"Environment {environment!r} not found in project id={project_id}")
+        return by_name[key]
 
     def _get_secret_value(self, secret_id: int) -> str:
         data = self._request("GET", f"/api/v1/secrets/{secret_id}?include_value=true")

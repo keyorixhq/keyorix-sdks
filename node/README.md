@@ -15,9 +15,11 @@ Zero external dependencies. Uses Node.js built-in http/https modules.
     const token = await keyorix.login('https://your-server:8443', 'admin', 'password');
     const client = new keyorix.Client('https://your-server:8443', token);
 
-    const dbPassword = await client.getSecret('db-password', 'production');
+    // Scoped to a project + environment -- an environment name is only
+    // unique within one project, not globally.
+    const dbPassword = await client.getSecretScoped('db-password', 'my-project', 'production');
 
-    const secrets = await client.listSecrets('production');
+    const secrets = await client.listSecretsScoped('my-project', 'production');
     secrets.forEach(s => console.log(s.name, s.type));
 
 ## Environment variables pattern
@@ -26,21 +28,37 @@ Zero external dependencies. Uses Node.js built-in http/https modules.
       process.env.KEYORIX_SERVER,
       process.env.KEYORIX_TOKEN
     );
-    const dbPassword = await client.getSecret('db-password', 'production');
+    const dbPassword = await client.getSecretScoped('db-password', 'my-project', 'production');
 
 ## API
 
 - keyorix.login(serverUrl, username, password) -> Promise<string>
 - new keyorix.Client(serverUrl, token, opts?)
-- client.getSecret(name, environment?) -> Promise<string>
-- client.listSecrets(environment?) -> Promise<Secret[]>
+- client.getSecretScoped(name, project, environment) -> Promise<string>
+- client.listSecretsScoped(project, environment) -> Promise<Secret[]>
 - client.health() -> Promise<boolean>
+
+`project`/`environment` each accept either a name (`string`, resolved to an ID
+via the server and cached on the `Client` for its lifetime) or a numeric ID
+(`number`, no resolution round trip).
+
+`getSecretScoped` matches `name` exactly among the secrets in that scope: zero
+matches throws `SecretNotFoundError`, more than one throws
+`AmbiguousSecretError` (with `.ids` listing every match) — it never guesses.
+
+### Deprecated: `getSecret`/`listSecrets` (environment-only)
+
+Removed in v0.3.0. An environment name is only unique within one project, not
+globally, so scoping by environment alone could silently resolve to another
+project's same-named secret. These now always throw without contacting the
+server — use `getSecretScoped`/`listSecretsScoped` instead.
 
 ## Errors
 
 - KeyorixError — base
 - AuthError — authentication failure
 - SecretNotFoundError — secret not found
+- AmbiguousSecretError — secret name matched more than one secret in scope (`.ids`)
 
 ## Requirements
 

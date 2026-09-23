@@ -11,8 +11,10 @@
  *   const token = await keyorix.login('https://your-server:8443', 'admin', 'password');
  *   const client = new keyorix.Client('https://your-server:8443', token);
  *
- *   const dbPassword = await client.getSecret('db-password', 'production');
- *   const secrets = await client.listSecrets('production');
+ *   // Scoped to a project + environment -- an environment name is only
+ *   // unique within one project, not globally.
+ *   const dbPassword = await client.getSecretScoped('db-password', 'my-project', 'production');
+ *   const secrets = await client.listSecretsScoped('my-project', 'production');
  */
 
 const http = require('node:http');
@@ -46,6 +48,17 @@ class SecretNotFoundError extends KeyorixError {
   constructor(message, opts) {
     super(message, opts);
     this.name = 'SecretNotFoundError';
+  }
+}
+
+// Thrown by getSecretScoped when a name matches more than one secret within
+// a project+environment scope. Never guessed which one was meant — see the
+// ids property for every matching secret ID.
+class AmbiguousSecretError extends KeyorixError {
+  constructor(message, { ids, ...opts } = {}) {
+    super(message, opts);
+    this.name = 'AmbiguousSecretError';
+    this.ids = ids;
   }
 }
 
@@ -160,6 +173,12 @@ class Client {
     this._token = token;
     this._timeout = opts.timeout || 30000;
     this._parsed = parseUrl(this._base);
+    // Populated lazily by _resolveProject/_resolveEnvironment and never
+    // invalidated for the lifetime of this Client -- a project/environment
+    // rename mid-process is expected to be rare enough that a fresh Client
+    // is the right way to pick it up, not a cache-expiry policy.
+    this._projectCache = new Map(); // lowercased name -> id
+    this._envCache = new Map(); // project id -> Map(lowercased name -> id)
   }
 
   async _request(path) {
@@ -206,13 +225,52 @@ class Client {
   }
 
   /**
-   * List secrets visible to the authenticated user.
-   * @param {string} [environment] - Filter by environment name
+   * @deprecated Removed in v0.3.0. An environment name is only unique
+   * within one project, not globally, so scoping by environment alone
+   * could silently return secrets from every project the caller can read.
+   * Always throws without ever contacting the server (no silent fallback
+   * to the old, unscoped behavior) -- use listSecretsScoped(project,
+   * environment) instead.
+   * @param {string} [environment]
    * @returns {Promise<Array>}
    */
   async listSecrets(environment = '') {
-    let path = '/api/v1/secrets';
-    if (environment) path += `?environment=${encodeURIComponent(environment)}`;
+    throw new KeyorixError(
+      "listSecrets(environment) was removed in v0.3.0 (an environment name is only " +
+        'unique within one project, not globally) -- use listSecretsScoped(project, environment) instead'
+    );
+  }
+
+  /**
+   * @deprecated Removed in v0.3.0. An environment name is only unique
+   * within one project, not globally, so scoping by environment alone
+   * could silently resolve to another project's same-named secret.
+   * Always throws without ever contacting the server (no silent fallback
+   * to the old, unscoped behavior) -- use getSecretScoped(name, project,
+   * environment) instead.
+   * @param {string} name
+   * @param {string} [environment]
+   * @returns {Promise<string>}
+   */
+  async getSecret(name, environment = '') {
+    throw new KeyorixError(
+      "getSecret(name, environment) was removed in v0.3.0 (an environment name is only " +
+        'unique within one project, not globally) -- use getSecretScoped(name, project, environment) instead'
+    );
+  }
+
+  /**
+   * List every secret within one project's environment.
+   * @param {string|number} project - Project name (resolved to an ID and
+   *   cached on this Client) or numeric project ID (no resolution round trip).
+   * @param {string|number} environment - Environment name (resolved within
+   *   `project`, cached) or numeric environment ID.
+   * @returns {Promise<Array>}
+   */
+  async listSecretsScoped(project, environment) {
+    const projectId = await this._resolveProject(project);
+    const envId = await this._resolveEnvironment(projectId, environment);
+    const path = `/api/v1/secrets?project_id=${projectId}&environment_id=${envId}`;
     const data = await this._request(path);
     return (data?.data?.secrets || []).map((s) => ({
       id: s.ID,
@@ -225,19 +283,70 @@ class Client {
   }
 
   /**
-   * Get the value of a secret by name.
-   * @param {string} name - Secret name
-   * @param {string} [environment] - Environment to search in
+   * Get the value of the secret named `name` within one project's
+   * environment. `name` is matched exactly (case-sensitive) among the
+   * secrets in that scope.
+   * @param {string} name
+   * @param {string|number} project - See listSecretsScoped.
+   * @param {string|number} environment - See listSecretsScoped.
    * @returns {Promise<string>} Plaintext secret value
+   * @throws {SecretNotFoundError} if no secret in scope has this name
+   * @throws {AmbiguousSecretError} if more than one secret in scope has this
+   *   name -- never guessed; .ids lists every match
    */
-  async getSecret(name, environment = '') {
-    const secrets = await this.listSecrets(environment);
-    const secret = secrets.find((s) => s.name === name);
-    if (!secret) {
-      const envMsg = environment ? ` in environment '${environment}'` : '';
-      throw new SecretNotFoundError(`Secret '${name}' not found${envMsg}`);
+  async getSecretScoped(name, project, environment) {
+    const secrets = await this.listSecretsScoped(project, environment);
+    const matches = secrets.filter((s) => s.name === name);
+    if (matches.length === 0) {
+      throw new SecretNotFoundError(
+        `Secret '${name}' not found in project '${project}', environment '${environment}'`
+      );
     }
-    return this._getSecretValue(secret.id);
+    if (matches.length > 1) {
+      const ids = matches.map((m) => m.id);
+      throw new AmbiguousSecretError(
+        `Secret '${name}' is ambiguous in project '${project}', environment '${environment}': matches IDs ${JSON.stringify(ids)}`,
+        { ids }
+      );
+    }
+    return this._getSecretValue(matches[0].id);
+  }
+
+  /**
+   * Resolve project to an ID. A number resolves with no network call; a
+   * string is resolved via GET /api/v1/projects and cached (case-insensitive
+   * match).
+   */
+  async _resolveProject(project) {
+    if (typeof project === 'number') return project;
+    const key = String(project).toLowerCase();
+    if (this._projectCache.has(key)) return this._projectCache.get(key);
+    const projects = await this.listProjects();
+    for (const p of projects) this._projectCache.set(String(p.name).toLowerCase(), p.id);
+    if (!this._projectCache.has(key)) throw new KeyorixError(`Project '${project}' not found`);
+    return this._projectCache.get(key);
+  }
+
+  /**
+   * Resolve environment to an ID within projectId. A number resolves with no
+   * network call; a string is resolved via the project-scoped environments
+   * route and cached (case-insensitive match).
+   */
+  async _resolveEnvironment(projectId, environment) {
+    if (typeof environment === 'number') return environment;
+    const key = String(environment).toLowerCase();
+    let byName = this._envCache.get(projectId);
+    if (byName?.has(key)) return byName.get(key);
+    if (!byName) {
+      byName = new Map();
+      this._envCache.set(projectId, byName);
+    }
+    const envs = await this.listEnvironments(projectId);
+    for (const e of envs) byName.set(String(e.name).toLowerCase(), e.id);
+    if (!byName.has(key)) {
+      throw new KeyorixError(`Environment '${environment}' not found in project id=${projectId}`);
+    }
+    return byName.get(key);
   }
 
   async _getSecretValue(secretId) {
@@ -299,4 +408,4 @@ class Client {
   }
 }
 
-module.exports = { Client, login, KeyorixError, AuthError, SecretNotFoundError };
+module.exports = { Client, login, KeyorixError, AuthError, SecretNotFoundError, AmbiguousSecretError };

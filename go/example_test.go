@@ -39,11 +39,11 @@ func TestIntegration_Login(t *testing.T) {
 	fmt.Println("✅ Health OK")
 
 	// List secrets
-	secrets, err := client.ListSecrets(ctx, "production")
+	secrets, err := client.ListSecretsScoped(ctx, keyorix.ProjectByName("default"), keyorix.EnvironmentByName("production"))
 	if err != nil {
-		t.Fatalf("ListSecrets failed: %v", err)
+		t.Fatalf("ListSecretsScoped failed: %v", err)
 	}
-	fmt.Printf("✅ ListSecrets OK — %d secrets in production\n", len(secrets))
+	fmt.Printf("✅ ListSecretsScoped OK — %d secrets in production\n", len(secrets))
 	for _, s := range secrets {
 		fmt.Printf("   - %s (%s)\n", s.Name, s.Type)
 	}

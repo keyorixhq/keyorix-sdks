@@ -40,15 +40,18 @@ func main() {
         log.Fatal(err)
     }
 
-    // Get a secret value
-    dbPassword, err := client.GetSecret(ctx, "db-password", "production")
+    // Get a secret value — scoped to a project + environment, since an
+    // environment name is only unique within one project, not globally.
+    dbPassword, err := client.GetSecretScoped(ctx, "db-password",
+        keyorix.ProjectByName("my-project"), keyorix.EnvironmentByName("production"))
     if err != nil {
         log.Fatal(err)
     }
     fmt.Println("DB password:", dbPassword)
 
-    // List all secrets in an environment
-    secrets, err := client.ListSecrets(ctx, "production")
+    // List all secrets in a project's environment
+    secrets, err := client.ListSecretsScoped(ctx,
+        keyorix.ProjectByName("my-project"), keyorix.EnvironmentByName("production"))
     if err != nil {
         log.Fatal(err)
     }
@@ -71,14 +74,28 @@ keyorix connect https://your-server --username admin --password your-password
 ### `keyorix.Login(ctx, serverURL, username, password string) (string, error)`
 Authenticates and returns a session token. Use this to avoid hardcoding tokens.
 
-### `client.GetSecret(ctx, name, environment string) (string, error)`
-Returns the plaintext value of a secret by name and environment.
+### `client.GetSecretScoped(ctx, name string, project ProjectRef, environment EnvironmentRef) (string, error)`
+Returns the plaintext value of a secret by name, within one project's environment.
+`name` is matched exactly among the secrets in that scope: zero matches returns
+`*SecretNotFoundError`, more than one returns `*AmbiguousSecretError` (listing every
+matching ID) — it never guesses.
 
-### `client.ListSecrets(ctx, environment string) ([]Secret, error)`
-Returns all secrets visible to the authenticated user. Pass empty string for all environments.
+### `client.ListSecretsScoped(ctx, project ProjectRef, environment EnvironmentRef) ([]Secret, error)`
+Returns every secret within one project's environment.
+
+`project`/`environment` are each either `keyorix.ProjectByName("name")` /
+`keyorix.EnvironmentByName("name")` (resolved to an ID via the server and cached on
+the `Client` for its lifetime) or `keyorix.ProjectByID(id)` / `keyorix.EnvironmentByID(id)`
+(no resolution round trip).
 
 ### `client.Health(ctx) error`
 Checks if the server is reachable. Returns nil if healthy.
+
+### Deprecated: `client.GetSecret`/`client.ListSecrets` (environment-only)
+Removed in v0.3.0. An environment name is only unique within one project, not
+globally, so scoping by environment alone could silently resolve to another
+project's same-named secret. These now always return an error without contacting
+the server — use `GetSecretScoped`/`ListSecretsScoped` instead.
 
 ### Options
 ```go

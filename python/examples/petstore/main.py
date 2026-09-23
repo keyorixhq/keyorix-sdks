@@ -152,7 +152,8 @@ def main():
     print("✅ Keyorix connection OK")
 
     print("🔑 Fetching database credentials from Keyorix...")
-    db_password = client.get_secret("petstore-db-password", "production")
+    project = os.environ.get("KEYORIX_PROJECT", "default")
+    db_password = client.get_secret_scoped("petstore-db-password", project, "production")
     print("✅ Database credentials retrieved")
 
     # ── 2. Connect to PostgreSQL ─────────────────────────────────────────────

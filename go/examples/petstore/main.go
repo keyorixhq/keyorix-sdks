@@ -38,7 +38,7 @@ type Pet struct {
 }
 
 const (
-	contentTypeJSON = "application/json"
+	contentTypeJSON   = "application/json"
 	headerContentType = "Content-Type"
 )
 
@@ -71,7 +71,8 @@ func main() {
 
 	// Fetch DB password from Keyorix
 	log.Printf("🔑 Fetching database credentials from Keyorix...")
-	dbPassword, err := client.GetSecret(ctx, "petstore-db-password", "production")
+	project := getEnv("KEYORIX_PROJECT", "default")
+	dbPassword, err := client.GetSecretScoped(ctx, "petstore-db-password", keyorix.ProjectByName(project), keyorix.EnvironmentByName("production"))
 	if err != nil {
 		log.Fatalf("Failed to fetch DB password from Keyorix: %v", err)
 	}

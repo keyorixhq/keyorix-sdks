@@ -109,7 +109,8 @@ async function main() {
   console.log('✅ Keyorix connection OK');
 
   console.log('🔑 Fetching database credentials from Keyorix...');
-  const dbPassword = await client.getSecret('petstore-db-password', 'production');
+  const project = process.env.KEYORIX_PROJECT || 'default';
+  const dbPassword = await client.getSecretScoped('petstore-db-password', project, 'production');
   console.log('✅ Database credentials retrieved');
 
   // 2. Connect to PostgreSQL
