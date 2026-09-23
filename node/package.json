@@ -1,6 +1,6 @@
 {
   "name": "@keyorixhq/sdk",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "description": "Node.js SDK for Keyorix — lightweight on-premise secrets manager",
   "main": "keyorix.js",
   "types": "keyorix.d.ts",
