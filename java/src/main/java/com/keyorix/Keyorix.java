@@ -13,7 +13,7 @@ import java.time.Duration;
  * <pre>
  *   String token = Keyorix.login("http://localhost:8080", "admin", "password");
  *   KeyorixClient client = Keyorix.newClient("http://localhost:8080", token);
- *   String secret = client.getSecret("db-password", "production");
+ *   String secret = client.getSecretScoped("db-password", "my-project", "production");
  * </pre>
  */
 public final class Keyorix {

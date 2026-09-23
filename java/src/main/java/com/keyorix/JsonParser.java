@@ -23,21 +23,49 @@ class JsonParser {
 
     /** Parse secret list from: {"data":{"secrets":[...]}} */
     static List<Secret> parseSecretList(String json) {
+        List<String> objects = extractArrayObjects(json, "secrets");
         List<Secret> result = new ArrayList<>();
-        int secretsIdx = json.indexOf("\"secrets\"");
-        if (secretsIdx == -1) return result;
-
-        int arrStart = json.indexOf('[', secretsIdx);
-        int arrEnd = findMatchingBracket(json, arrStart, '[', ']');
-        if (arrStart == -1 || arrEnd == -1) return result;
-
-        String arr = json.substring(arrStart + 1, arrEnd);
-        List<String> objects = splitObjects(arr);
         for (String obj : objects) {
             Secret s = parseSecret(obj);
             if (s != null) result.add(s);
         }
         return result;
+    }
+
+    /** Parse project list from: {"data":{"projects":[...]}} */
+    static List<Project> parseProjectList(String json) {
+        List<String> objects = extractArrayObjects(json, "projects");
+        List<Project> result = new ArrayList<>();
+        for (String obj : objects) {
+            Project p = parseProject(obj);
+            if (p != null) result.add(p);
+        }
+        return result;
+    }
+
+    /** Parse environment list from: {"data":{"environments":[...]}} */
+    static List<Environment> parseEnvironmentList(String json) {
+        List<String> objects = extractArrayObjects(json, "environments");
+        List<Environment> result = new ArrayList<>();
+        for (String obj : objects) {
+            Environment e = parseEnvironment(obj);
+            if (e != null) result.add(e);
+        }
+        return result;
+    }
+
+    /** Extracts the JSON objects inside the array value of the given key,
+     * e.g. extractArrayObjects(json, "secrets") for {"data":{"secrets":[...]}}. */
+    private static List<String> extractArrayObjects(String json, String arrayKey) {
+        List<String> result = new ArrayList<>();
+        int idx = json.indexOf("\"" + arrayKey + "\"");
+        if (idx == -1) return result;
+
+        int arrStart = json.indexOf('[', idx);
+        int arrEnd = findMatchingBracket(json, arrStart, '[', ']');
+        if (arrStart == -1 || arrEnd == -1) return result;
+
+        return splitObjects(json.substring(arrStart + 1, arrEnd));
     }
 
     private static Secret parseSecret(String obj) {
@@ -51,6 +79,32 @@ class JsonParser {
             if (name == null) return null;
             return new Secret(id, name, type != null ? type : "", env != null ? env : "",
                               projectId, createdAt != null ? createdAt : "");
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    private static Project parseProject(String obj) {
+        try {
+            long id = parseLong(obj, "ID");
+            String name = extractString(obj, "Name");
+            String description = extractString(obj, "Description");
+            String createdAt = extractString(obj, "CreatedAt");
+            if (name == null) return null;
+            return new Project(id, name, description != null ? description : "",
+                                createdAt != null ? createdAt : "");
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    private static Environment parseEnvironment(String obj) {
+        try {
+            long id = parseLong(obj, "ID");
+            String name = extractString(obj, "Name");
+            long projectId = parseLong(obj, "ProjectID");
+            if (name == null) return null;
+            return new Environment(id, projectId, name);
         } catch (Exception e) {
             return null;
         }
