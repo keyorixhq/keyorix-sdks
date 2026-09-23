@@ -98,11 +98,15 @@ func TestAPIError_ErrorOmitsBody(t *testing.T) {
 	}
 }
 
-func TestListSecrets_wrapsServerErrorWithoutLeakingBody(t *testing.T) {
-	const raw = "internal: secret_key=super-sensitive-detail"
+// TestListSecrets_Deprecated_NeverCallsServer covers the v0.3.0 removal: the
+// deprecated environment-only ListSecrets must return its migration error
+// without ever making a request — no silent fallback to the old, unscoped
+// behavior it used to have.
+func TestListSecrets_Deprecated_NeverCallsServer(t *testing.T) {
+	called := false
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusInternalServerError)
-		w.Write([]byte(raw))
+		called = true
+		w.WriteHeader(http.StatusOK)
 	}))
 	defer srv.Close()
 
@@ -110,7 +114,59 @@ func TestListSecrets_wrapsServerErrorWithoutLeakingBody(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	_, err = c.ListSecrets(context.Background(), "")
+	if _, err := c.ListSecrets(context.Background(), "production"); err == nil {
+		t.Fatal("expected an error")
+	} else if !strings.Contains(err.Error(), "ListSecretsScoped") {
+		t.Errorf("expected error to point callers at ListSecretsScoped, got: %v", err)
+	}
+	if called {
+		t.Error("ListSecrets must not contact the server at all")
+	}
+}
+
+// TestGetSecret_Deprecated_NeverCallsServer is the GetSecret counterpart.
+func TestGetSecret_Deprecated_NeverCallsServer(t *testing.T) {
+	called := false
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		called = true
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	c, err := New(srv.URL, "test-token")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if _, err := c.GetSecret(context.Background(), "db-password", "production"); err == nil {
+		t.Fatal("expected an error")
+	} else if !strings.Contains(err.Error(), "GetSecretScoped") {
+		t.Errorf("expected error to point callers at GetSecretScoped, got: %v", err)
+	}
+	if called {
+		t.Error("GetSecret must not contact the server at all")
+	}
+}
+
+func TestListSecretsScoped_wrapsServerErrorWithoutLeakingBody(t *testing.T) {
+	const raw = "internal: secret_key=super-sensitive-detail"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v1/projects":
+			w.Write([]byte(`{"data":{"projects":[{"ID":1,"Name":"proj"}]}}`))
+		case "/api/v1/projects/1/environments":
+			w.Write([]byte(`{"data":{"environments":[{"ID":1,"Name":"prod","ProjectID":1}]}}`))
+		default:
+			w.WriteHeader(http.StatusInternalServerError)
+			w.Write([]byte(raw))
+		}
+	}))
+	defer srv.Close()
+
+	c, err := New(srv.URL, "test-token")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	_, err = c.ListSecretsScoped(context.Background(), ProjectByName("proj"), EnvironmentByName("prod"))
 	if err == nil {
 		t.Fatal("expected an error")
 	}
