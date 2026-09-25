@@ -111,7 +111,7 @@ class ContractTest {
         Project defaultProject = client.listProjects().stream()
                 .filter(p -> p.getName().equals("default")).findFirst().orElseThrow();
         List<Environment> envs = client.listEnvironments(defaultProject.getId());
-        List<String> names = envs.stream().map(Environment::getName).sorted().toList();
+        List<String> names = envs.stream().map(Environment::getName).sorted().collect(java.util.stream.Collectors.toList());
         assertEquals(List.of("development", "production", "staging"), names);
         for (Environment e : envs) {
             assertEquals(defaultProject.getId(), e.getProjectId());
