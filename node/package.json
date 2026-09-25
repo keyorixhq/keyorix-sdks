@@ -5,7 +5,8 @@
   "main": "keyorix.js",
   "types": "keyorix.d.ts",
   "scripts": {
-    "test": "node test.js"
+    "test": "node test.js",
+    "test:contract": "node contract-test.js"
   },
   "keywords": ["secrets", "security", "devops", "keyorix"],
   "author": "Keyorix HQ",
