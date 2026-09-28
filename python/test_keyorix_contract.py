@@ -69,6 +69,49 @@ def _seed_secret(token, project_id, environment_id, name, value):
         raise RuntimeError(f"POST /api/v1/secrets: unexpected status {status}: {body!r}")
 
 
+def _create_pat(admin_token, name):
+    """Mints a personal access token for the caller identified by
+    admin_token, via raw HTTP (PAT issuance is not part of this SDK's
+    public surface)."""
+    status, body = _post_json("/api/v1/auth/tokens", {"name": name}, admin_token)
+    if status >= 300:
+        raise RuntimeError(f"POST /api/v1/auth/tokens: unexpected status {status}: {body!r}")
+    token = json.loads(body).get("data", {}).get("token")
+    if not token:
+        raise RuntimeError("create-PAT response had no token")
+    return token
+
+
+def _create_machine_token(admin_token, project_id):
+    """Creates a fresh machine identity in project_id and issues it a
+    token, via raw HTTP (neither is part of this SDK's public surface). A
+    brand-new machine identity holds no roles, so this token authenticates
+    but is not authorized for anything yet -- exactly the shape needed to
+    prove authentication succeeds independently of authorization."""
+    status, body = _post_json(
+        f"/api/v1/projects/{project_id}/machine-identities",
+        {"name": f"contract-test-machine-{time.time_ns()}", "identity_type": "service"},
+        admin_token,
+    )
+    if status >= 300:
+        raise RuntimeError(f"POST machine-identities: unexpected status {status}: {body!r}")
+    machine_id = json.loads(body).get("data", {}).get("machine_identity", {}).get("id")
+    if not machine_id:
+        raise RuntimeError("create-machine-identity response had no id")
+
+    status, body = _post_json(
+        f"/api/v1/projects/{project_id}/machine-identities/{machine_id}/tokens",
+        {"name": "contract-test-machine-token"},
+        admin_token,
+    )
+    if status >= 300:
+        raise RuntimeError(f"POST machine-identities tokens: unexpected status {status}: {body!r}")
+    token = json.loads(body).get("data", {}).get("token")
+    if not token:
+        raise RuntimeError("issue-machine-token response had no token")
+    return token
+
+
 @unittest.skipUnless(SERVER_URL, "KEYORIX_CONTRACT_SERVER_URL not set -- skipping contract test (needs a real keyorix-server)")
 class TestContractFullClientSurface(unittest.TestCase):
     @classmethod
@@ -119,6 +162,52 @@ class TestContractFullClientSurface(unittest.TestCase):
 
         value = self.client.get_secret_scoped(secret_name, default.id, dev_env.id)
         self.assertEqual(value, secret_value)
+
+    def test_pat_auth_works_transparently(self):
+        pat = _create_pat(self.token, "contract-test-pat")
+        pat_client = keyorix.Client(SERVER_URL, pat)
+        try:
+            pat_client.list_projects()
+        except keyorix.KeyorixError as e:
+            self.fail(f"Client with a PAT: {e} (expected success -- a PAT presents identically to a session token)")
+
+    def test_machine_token_auth_works_transparently(self):
+        projects = self.client.list_projects()
+        default = next(p for p in projects if p.name == "default")
+        machine_token = _create_machine_token(self.token, default.id)
+        machine_client = keyorix.Client(SERVER_URL, machine_token)
+        # A brand-new machine identity holds no roles, so this must
+        # authenticate (not AuthError) even though it can't yet be
+        # authorized for anything (ForbiddenError) -- proving the token is
+        # recognized as valid, distinct from being permitted.
+        with self.assertRaises(keyorix.ForbiddenError):
+            machine_client.list_projects()
+
+    def test_timeout_is_enforced_against_a_slow_server(self):
+        import http.server
+        import threading
+
+        class _SlowHandler(http.server.BaseHTTPRequestHandler):
+            def log_message(self, *args):
+                pass
+
+            def do_GET(self):
+                time.sleep(0.2)
+                body = b'{"data":{"projects":[]}}'
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write(body)
+
+        httpd = http.server.HTTPServer(("localhost", 0), _SlowHandler)
+        thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+        thread.start()
+        try:
+            slow_client = keyorix.Client(f"http://localhost:{httpd.server_address[1]}", "tok", timeout=0.01)
+            with self.assertRaises(keyorix.KeyorixError):
+                slow_client.list_projects()
+        finally:
+            httpd.shutdown()
 
 
 if __name__ == "__main__":

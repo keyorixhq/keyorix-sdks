@@ -22,7 +22,7 @@
 // Skipped unless KEYORIX_CONTRACT_SERVER_URL is set.
 
 const http = require('node:http');
-const { Client, login } = require('./keyorix');
+const { Client, login, ForbiddenError } = require('./keyorix');
 
 let passed = 0;
 let failed = 0;
@@ -80,6 +80,50 @@ async function seedSecret(serverUrl, token, projectId, environmentId, name, valu
   }
 }
 
+// Mints a personal access token for the caller identified by adminToken, via
+// raw HTTP (PAT issuance is not part of this SDK's public surface).
+async function createPAT(serverUrl, adminToken, name) {
+  const resp = await postJSON(serverUrl, '/api/v1/auth/tokens', { name }, adminToken);
+  if (resp.statusCode >= 300) {
+    throw new Error(`POST /api/v1/auth/tokens: unexpected status ${resp.statusCode}: ${resp.body}`);
+  }
+  const token = JSON.parse(resp.body)?.data?.token;
+  if (!token) throw new Error('create-PAT response had no token');
+  return token;
+}
+
+// Creates a fresh machine identity in projectId and issues it a token, via
+// raw HTTP (neither is part of this SDK's public surface). A brand-new
+// machine identity holds no roles, so this token authenticates but is not
+// authorized for anything yet -- exactly the shape needed to prove
+// authentication succeeds independently of authorization.
+async function createMachineToken(serverUrl, adminToken, projectId) {
+  const idResp = await postJSON(
+    serverUrl,
+    `/api/v1/projects/${projectId}/machine-identities`,
+    { name: `contract-test-machine-${Date.now()}`, identity_type: 'service' },
+    adminToken
+  );
+  if (idResp.statusCode >= 300) {
+    throw new Error(`POST machine-identities: unexpected status ${idResp.statusCode}: ${idResp.body}`);
+  }
+  const machineId = JSON.parse(idResp.body)?.data?.machine_identity?.id;
+  if (!machineId) throw new Error('create-machine-identity response had no id');
+
+  const tokResp = await postJSON(
+    serverUrl,
+    `/api/v1/projects/${projectId}/machine-identities/${machineId}/tokens`,
+    { name: 'contract-test-machine-token' },
+    adminToken
+  );
+  if (tokResp.statusCode >= 300) {
+    throw new Error(`POST machine-identities tokens: unexpected status ${tokResp.statusCode}: ${tokResp.body}`);
+  }
+  const token = JSON.parse(tokResp.body)?.data?.token;
+  if (!token) throw new Error('issue-machine-token response had no token');
+  return token;
+}
+
 async function runContractTests() {
   const serverUrl = process.env.KEYORIX_CONTRACT_SERVER_URL;
   if (!serverUrl) {
@@ -129,6 +173,47 @@ async function runContractTests() {
 
   const value = await client.getSecretScoped(secretName, defaultProject.id, devEnv.id);
   assert(value === secretValue, `getSecretScoped() round-trips the secret value — got ${JSON.stringify(value)}`);
+
+  const pat = await createPAT(serverUrl, token, 'contract-test-pat');
+  const patClient = new Client(serverUrl, pat);
+  try {
+    await patClient.listProjects();
+    assert(true, 'Client works transparently with a PAT, not just a session token');
+  } catch (e) {
+    assert(false, `Client with a PAT: ${e.message} (expected success -- a PAT presents identically to a session token)`);
+  }
+
+  const machineToken = await createMachineToken(serverUrl, token, defaultProject.id);
+  const machineClient = new Client(serverUrl, machineToken);
+  try {
+    await machineClient.listProjects();
+    assert(false, 'expected a fresh machine token (no roles yet) to be forbidden, not succeed');
+  } catch (e) {
+    // A brand-new machine identity holds no roles, so this must authenticate
+    // (not AuthError) even though it can't yet be authorized for anything
+    // (ForbiddenError) -- proving the token is recognized as valid, distinct
+    // from being permitted.
+    assert(e instanceof ForbiddenError, `Client works transparently with a machine identity token — got ${e.constructor.name}, want ForbiddenError`);
+  }
+
+  const slowServer = http.createServer((req, res) => {
+    setTimeout(() => {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ data: { projects: [] } }));
+    }, 200);
+  });
+  await new Promise((resolve) => slowServer.listen(0, resolve));
+  try {
+    const slowClient = new Client(`http://localhost:${slowServer.address().port}`, 'tok', { timeout: 10 });
+    try {
+      await slowClient.listProjects();
+      assert(false, 'expected a timeout error from a 10ms client against a 200ms-slow server');
+    } catch (e) {
+      assert(true, `timeout is actually enforced against a slow server — ${e.message}`);
+    }
+  } finally {
+    slowServer.close();
+  }
 
   console.log(`\n${passed} passed, ${failed} failed`);
   if (failed > 0) process.exit(1);

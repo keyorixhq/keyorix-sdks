@@ -232,6 +232,8 @@ def login(server_url: str, username: str, password: str, timeout: int = 30) -> s
         raise AuthError(f"Login failed (HTTP {e.code})", status_code=e.code, response_body=body) from e
     except urllib.error.URLError as e:
         raise KeyorixError(f"Server unreachable: {e.reason}") from e
+    except TimeoutError as e:
+        raise KeyorixError(f"Request timed out: {e}") from e
 
 
 class Client:
@@ -273,6 +275,8 @@ class Client:
             raise _error_for_response(e.code, body) from e
         except urllib.error.URLError as e:
             raise KeyorixError(f"Request failed: {e.reason}") from e
+        except TimeoutError as e:
+            raise KeyorixError(f"Request timed out: {e}") from e
 
     def health(self) -> bool:
         """Check if the server is reachable and healthy.
@@ -292,6 +296,8 @@ class Client:
                 return resp.status == 200
         except urllib.error.URLError as e:
             raise KeyorixError(f"Server unreachable: {e}") from e
+        except TimeoutError as e:
+            raise KeyorixError(f"Request timed out: {e}") from e
 
     def list_secrets(self, environment: str = "") -> List[Secret]:
         """Deprecated: removed in keyorix v0.3.0.
@@ -450,6 +456,10 @@ class Client:
         except urllib.error.HTTPError as e:
             body = e.read().decode(errors="replace")
             raise _error_for_response(e.code, body) from e
+        except urllib.error.URLError as e:
+            raise KeyorixError(f"Request failed: {e.reason}") from e
+        except TimeoutError as e:
+            raise KeyorixError(f"Request timed out: {e}") from e
 
     def list_environments(self, project_id: int) -> List["Environment"]:
         """List all environments for a project.

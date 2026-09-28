@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"testing"
 	"time"
@@ -108,6 +110,111 @@ func seedSecret(t *testing.T, serverURL, token string, projectID, environmentID 
 	if resp.StatusCode >= 300 {
 		t.Fatalf("POST /api/v1/secrets: unexpected status %d", resp.StatusCode)
 	}
+}
+
+// createPAT mints a personal access token for the caller identified by
+// adminToken, via raw HTTP (PAT issuance is not part of this SDK's public
+// surface). Returns the plaintext token.
+func createPAT(t *testing.T, serverURL, adminToken, name string) string {
+	t.Helper()
+	body, _ := json.Marshal(map[string]any{"name": name})
+	req, err := http.NewRequest(http.MethodPost, serverURL+"/api/v1/auth/tokens", bytes.NewReader(body)) //nolint:gosec // serverURL is the operator-supplied contract-test target, not attacker input
+	if err != nil {
+		t.Fatalf("build create-PAT request: %v", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", authBearer+adminToken)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("POST /api/v1/auth/tokens: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		t.Fatalf("POST /api/v1/auth/tokens: unexpected status %d", resp.StatusCode)
+	}
+	var result struct {
+		Data struct {
+			Token string `json:"token"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		t.Fatalf("decode create-PAT response: %v", err)
+	}
+	if result.Data.Token == "" {
+		t.Fatal("create-PAT response had no token")
+	}
+	return result.Data.Token
+}
+
+// createMachineToken creates a fresh machine identity in projectID and issues
+// it a token, via raw HTTP (neither is part of this SDK's public surface).
+// Returns the plaintext token. A brand-new machine identity holds no roles,
+// so this token authenticates but is not authorized for anything yet --
+// exactly the shape needed to prove authentication succeeds independently of
+// authorization.
+func createMachineToken(t *testing.T, serverURL, adminToken string, projectID uint) string {
+	t.Helper()
+	idBody, _ := json.Marshal(map[string]any{
+		"name":          fmt.Sprintf("contract-test-machine-%d", time.Now().UnixNano()),
+		"identity_type": "service",
+	})
+	idReq, err := http.NewRequest(http.MethodPost, fmt.Sprintf("%s/api/v1/projects/%d/machine-identities", serverURL, projectID), bytes.NewReader(idBody)) //nolint:gosec // serverURL is the operator-supplied contract-test target, not attacker input
+	if err != nil {
+		t.Fatalf("build create-machine-identity request: %v", err)
+	}
+	idReq.Header.Set("Content-Type", "application/json")
+	idReq.Header.Set("Authorization", authBearer+adminToken)
+	idResp, err := http.DefaultClient.Do(idReq)
+	if err != nil {
+		t.Fatalf("POST machine-identities: %v", err)
+	}
+	defer idResp.Body.Close()
+	if idResp.StatusCode >= 300 {
+		t.Fatalf("POST machine-identities: unexpected status %d", idResp.StatusCode)
+	}
+	var idResult struct {
+		Data struct {
+			MachineIdentity struct {
+				ID uint `json:"id"`
+			} `json:"machine_identity"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(idResp.Body).Decode(&idResult); err != nil {
+		t.Fatalf("decode create-machine-identity response: %v", err)
+	}
+	machineID := idResult.Data.MachineIdentity.ID
+	if machineID == 0 {
+		t.Fatal("create-machine-identity response had no id")
+	}
+
+	tokBody, _ := json.Marshal(map[string]any{"name": "contract-test-machine-token"})
+	tokReq, err := http.NewRequest(http.MethodPost,
+		fmt.Sprintf("%s/api/v1/projects/%d/machine-identities/%d/tokens", serverURL, projectID, machineID), bytes.NewReader(tokBody)) //nolint:gosec // serverURL is the operator-supplied contract-test target, not attacker input
+	if err != nil {
+		t.Fatalf("build issue-machine-token request: %v", err)
+	}
+	tokReq.Header.Set("Content-Type", "application/json")
+	tokReq.Header.Set("Authorization", authBearer+adminToken)
+	tokResp, err := http.DefaultClient.Do(tokReq)
+	if err != nil {
+		t.Fatalf("POST machine-identities tokens: %v", err)
+	}
+	defer tokResp.Body.Close()
+	if tokResp.StatusCode >= 300 {
+		t.Fatalf("POST machine-identities tokens: unexpected status %d", tokResp.StatusCode)
+	}
+	var tokResult struct {
+		Data struct {
+			Token string `json:"token"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(tokResp.Body).Decode(&tokResult); err != nil {
+		t.Fatalf("decode issue-machine-token response: %v", err)
+	}
+	if tokResult.Data.Token == "" {
+		t.Fatal("issue-machine-token response had no token")
+	}
+	return tokResult.Data.Token
 }
 
 func TestContract_FullClientSurface(t *testing.T) {
@@ -231,6 +338,52 @@ func TestContract_FullClientSurface(t *testing.T) {
 		}
 		if got != secretValue {
 			t.Errorf("GetSecretScoped: got value %q, want %q", got, secretValue)
+		}
+	})
+
+	t.Run("New works transparently with a PAT, not just a session token", func(t *testing.T) {
+		pat := createPAT(t, serverURL, token, "contract-test-pat")
+		patClient, err := New(serverURL, pat)
+		if err != nil {
+			t.Fatalf("New: %v", err)
+		}
+		if _, err := patClient.ListProjects(ctx); err != nil {
+			t.Errorf("ListProjects with a PAT: %v (expected success -- a PAT presents identically to a session token)", err)
+		}
+	})
+
+	t.Run("New works transparently with a machine identity token", func(t *testing.T) {
+		if defaultProjectID == 0 {
+			t.Skip("default project not found (see ListProjects subtest)")
+		}
+		machineToken := createMachineToken(t, serverURL, token, defaultProjectID)
+		machineClient, err := New(serverURL, machineToken)
+		if err != nil {
+			t.Fatalf("New: %v", err)
+		}
+		// A brand-new machine identity holds no roles, so this must
+		// authenticate (not AuthError) even though it can't yet be
+		// authorized for anything (ForbiddenError) -- proving the token is
+		// recognized as valid, distinct from being permitted.
+		_, err = machineClient.ListProjects(ctx)
+		var forbidden *ForbiddenError
+		if !errors.As(err, &forbidden) {
+			t.Errorf("ListProjects with a fresh machine token: got %T (%v), want *ForbiddenError", err, err)
+		}
+	})
+
+	t.Run("WithTimeout is actually enforced against a slow server", func(t *testing.T) {
+		slow := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			time.Sleep(200 * time.Millisecond)
+			w.Write([]byte(`{"data":{"projects":[]}}`))
+		}))
+		defer slow.Close()
+		slowClient, err := New(slow.URL, "test-token", WithTimeout(10*time.Millisecond))
+		if err != nil {
+			t.Fatalf("New: %v", err)
+		}
+		if _, err := slowClient.ListProjects(ctx); err == nil {
+			t.Error("expected a timeout error from a 10ms client against a 200ms-slow server, got nil")
 		}
 	})
 

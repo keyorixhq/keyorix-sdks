@@ -16,6 +16,17 @@ All notable changes to the Python SDK are documented here.
 
 ### Fixed
 
+- **A request timeout raised a bare, undocumented `TimeoutError` instead
+  of `KeyorixError`** — Python's socket-level `TimeoutError` (raised by
+  `urllib.request.urlopen` on timeout) is not a subclass of
+  `urllib.error.URLError`, so it fell through every existing `except
+  urllib.error.URLError` handler uncaught. `create_project` didn't even
+  catch `URLError`, so a connection failure there leaked unwrapped too.
+  Found while adding a contract-test case that actually exercises timeout
+  behavior against a real slow server (was an unhandled error, now a
+  clean `KeyorixError` — see `test_keyorix_contract.py`). Fixed at every
+  request call site.
+
 - **`Secret`/`Project`/`Environment` wire field reads updated to snake_case**
   (`id`, `name`, `project_id`, `created_at`, `description`, `type`), matching
   the server's current response shape since keyorixhq/keyorix#2098 and #2128
