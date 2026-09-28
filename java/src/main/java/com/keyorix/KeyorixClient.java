@@ -1,5 +1,6 @@
 package com.keyorix;
 
+import java.io.FileInputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.net.HttpURLConnection;
@@ -7,11 +8,18 @@ import java.net.URI;
 import java.net.URISyntaxException;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
+import java.security.KeyStore;
+import java.security.cert.Certificate;
+import java.security.cert.CertificateFactory;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import javax.net.ssl.HttpsURLConnection;
+import javax.net.ssl.SSLContext;
+import javax.net.ssl.SSLSocketFactory;
+import javax.net.ssl.TrustManagerFactory;
 
 /**
  * Keyorix Java SDK — client for the Keyorix secrets manager API.
@@ -34,6 +42,7 @@ public class KeyorixClient {
     private final String baseUrl;
     private final String token;
     private final int timeoutMs;
+    private final SSLSocketFactory sslSocketFactory;
 
     // Populated lazily by resolveProject/resolveEnvironment and never
     // invalidated for the lifetime of this client — a project/environment
@@ -64,10 +73,49 @@ public class KeyorixClient {
      * @throws KeyorixException if baseUrl is invalid or uses a disallowed scheme
      */
     public KeyorixClient(String baseUrl, String token, Duration timeout) throws KeyorixException {
+        this(baseUrl, token, timeout, null);
+    }
+
+    /**
+     * Creates a new KeyorixClient trusting a private/internal CA, for
+     * servers whose certificate isn't signed by a CA in the JVM's default
+     * trust store. No effect on plain http:// (loopback-only) connections.
+     *
+     * @param baseUrl    Base URL of your Keyorix server; must use https:// (http://
+     *                   is only accepted for localhost/loopback)
+     * @param token      Session token
+     * @param timeout    Request timeout
+     * @param caCertPath Path to a PEM-encoded CA certificate to trust, or null
+     *                   to use the JVM's default trust store
+     * @throws KeyorixException if baseUrl is invalid, uses a disallowed scheme,
+     *                          or caCertPath cannot be read/parsed
+     */
+    public KeyorixClient(String baseUrl, String token, Duration timeout, String caCertPath) throws KeyorixException {
         validateServerUrl(baseUrl);
         this.baseUrl = baseUrl.replaceAll("/$", "");
         this.token = token;
         this.timeoutMs = (int) timeout.toMillis();
+        this.sslSocketFactory = caCertPath == null ? null : buildSslSocketFactory(caCertPath);
+    }
+
+    private static SSLSocketFactory buildSslSocketFactory(String caCertPath) throws KeyorixException {
+        try {
+            CertificateFactory cf = CertificateFactory.getInstance("X.509");
+            Certificate ca;
+            try (FileInputStream fis = new FileInputStream(caCertPath)) {
+                ca = cf.generateCertificate(fis);
+            }
+            KeyStore keyStore = KeyStore.getInstance(KeyStore.getDefaultType());
+            keyStore.load(null, null);
+            keyStore.setCertificateEntry("ca", ca);
+            TrustManagerFactory tmf = TrustManagerFactory.getInstance(TrustManagerFactory.getDefaultAlgorithm());
+            tmf.init(keyStore);
+            SSLContext sslContext = SSLContext.getInstance("TLS");
+            sslContext.init(null, tmf.getTrustManagers(), null);
+            return sslContext.getSocketFactory();
+        } catch (Exception e) {
+            throw new KeyorixException("Failed to load CA certificate '" + caCertPath + "': " + e.getMessage(), e);
+        }
     }
 
     /**
@@ -284,10 +332,9 @@ public class KeyorixClient {
         try {
             HttpURLConnection conn = openConnection(baseUrl + path, "GET", true);
             int status = conn.getResponseCode();
-            if (status == 401) throw new AuthException("Unauthorized — check your token");
             if (status != 200) {
                 String body = readStream(conn.getErrorStream());
-                throw new KeyorixException("Server returned " + status, status, body);
+                throw mapError(status, body);
             }
             String body = readStream(conn.getInputStream());
             conn.disconnect();
@@ -297,8 +344,31 @@ public class KeyorixClient {
         }
     }
 
+    /**
+     * Maps a non-2xx HTTP status to a typed exception: AuthException (401),
+     * ForbiddenException (403), NotFoundException (404), or the generic
+     * KeyorixException for anything else. Every request path throws through
+     * this so callers can catch the specific type they need, regardless of
+     * which method failed.
+     */
+    private static KeyorixException mapError(int status, String body) {
+        switch (status) {
+            case 401:
+                return new AuthException("Unauthorized — check your token", status, body);
+            case 403:
+                return new ForbiddenException("Forbidden — token lacks permission for this request", status, body);
+            case 404:
+                return new NotFoundException("Resource not found", status, body);
+            default:
+                return new KeyorixException("Server returned " + status, status, body);
+        }
+    }
+
     private HttpURLConnection openConnection(String url, String method, boolean auth) throws IOException {
         HttpURLConnection conn = (HttpURLConnection) new URL(url).openConnection();
+        if (sslSocketFactory != null && conn instanceof HttpsURLConnection) {
+            ((HttpsURLConnection) conn).setSSLSocketFactory(sslSocketFactory);
+        }
         conn.setRequestMethod(method);
         conn.setConnectTimeout(timeoutMs);
         conn.setReadTimeout(timeoutMs);

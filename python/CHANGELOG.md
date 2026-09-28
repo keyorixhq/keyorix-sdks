@@ -4,6 +4,16 @@ All notable changes to the Python SDK are documented here.
 
 ## v0.3.0 (unreleased)
 
+### Added
+
+- `ForbiddenError` (403) and `NotFoundError` (404), alongside the existing
+  `AuthError` (401) — every request path now raises a typed error
+  `isinstance()` can distinguish, instead of one generic `KeyorixError` for
+  everything.
+- `Client` constructor parameter `ca_file` — path to a PEM file of trusted
+  CA certificate(s), for servers using a private/internal CA. No effect on
+  plain `http://` (loopback-only) connections.
+
 ### Fixed
 
 - **`Secret`/`Project`/`Environment` wire field reads updated to snake_case**

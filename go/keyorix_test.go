@@ -182,3 +182,57 @@ func TestListSecretsScoped_wrapsServerErrorWithoutLeakingBody(t *testing.T) {
 		t.Errorf("expected APIError.Body to carry the raw body, got %q", apiErr.Body)
 	}
 }
+
+// TestErrorForResponse_MapsStatusToTypedError proves every request path
+// (not just one hand-picked call site) returns a typed error that
+// errors.As can distinguish, for the three statuses callers most need to
+// branch on. Exercised through ListProjects (a representative GET call);
+// errorForResponse itself is what every other method funnels through too.
+func TestErrorForResponse_MapsStatusToTypedError(t *testing.T) {
+	cases := []struct {
+		status int
+		check  func(t *testing.T, err error)
+	}{
+		{http.StatusUnauthorized, func(t *testing.T, err error) {
+			var authErr *AuthError
+			if !errors.As(err, &authErr) {
+				t.Fatalf("expected *AuthError, got %T (%v)", err, err)
+			}
+			var apiErr *APIError
+			if !errors.As(err, &apiErr) || apiErr.StatusCode != http.StatusUnauthorized {
+				t.Errorf("expected Unwrap to reach *APIError with StatusCode 401, got %+v", apiErr)
+			}
+		}},
+		{http.StatusForbidden, func(t *testing.T, err error) {
+			var forbidden *ForbiddenError
+			if !errors.As(err, &forbidden) {
+				t.Fatalf("expected *ForbiddenError, got %T (%v)", err, err)
+			}
+		}},
+		{http.StatusNotFound, func(t *testing.T, err error) {
+			var notFound *NotFoundError
+			if !errors.As(err, &notFound) {
+				t.Fatalf("expected *NotFoundError, got %T (%v)", err, err)
+			}
+		}},
+	}
+
+	for _, tc := range cases {
+		t.Run(http.StatusText(tc.status), func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(tc.status)
+			}))
+			defer srv.Close()
+
+			c, err := New(srv.URL, "test-token")
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			_, err = c.ListProjects(context.Background())
+			if err == nil {
+				t.Fatal("expected an error")
+			}
+			tc.check(t, err)
+		})
+	}
+}

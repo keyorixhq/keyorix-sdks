@@ -4,6 +4,16 @@ All notable changes to the Java SDK are documented here.
 
 ## v0.3.0 (unreleased)
 
+### Added
+
+- `ForbiddenException` (403) and `NotFoundException` (404), alongside the
+  existing `AuthException` (401) — every request path now throws a typed
+  exception callers can catch specifically, instead of one generic
+  `KeyorixException` for everything.
+- `KeyorixClient(baseUrl, token, timeout, caCertPath)` constructor overload
+  — trusts a private/internal CA (PEM), for servers whose certificate isn't
+  signed by a CA in the JVM's default trust store.
+
 ### Fixed
 
 - **`Secret`/`Project`/`Environment` wire field lookups updated to

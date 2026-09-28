@@ -84,6 +84,49 @@ func (e *APIError) Error() string {
 	return fmt.Sprintf("keyorix: server returned %d", e.StatusCode)
 }
 
+// AuthError indicates the server rejected the request as unauthenticated
+// (HTTP 401) — a missing, expired, or invalid token. Unwraps to *APIError.
+type AuthError struct{ *APIError }
+
+func (e *AuthError) Error() string { return "keyorix: unauthorized — check your token" }
+func (e *AuthError) Unwrap() error { return e.APIError }
+
+// ForbiddenError indicates the server rejected the request as unauthorized
+// for this token's permissions (HTTP 403). Unwraps to *APIError.
+type ForbiddenError struct{ *APIError }
+
+func (e *ForbiddenError) Error() string {
+	return "keyorix: forbidden — token lacks permission for this request"
+}
+func (e *ForbiddenError) Unwrap() error { return e.APIError }
+
+// NotFoundError indicates the requested resource does not exist on the
+// server (HTTP 404). Distinct from the client-side SecretNotFoundError,
+// which is raised by name-based resolution before any such request is made.
+// Unwraps to *APIError.
+type NotFoundError struct{ *APIError }
+
+func (e *NotFoundError) Error() string { return "keyorix: resource not found" }
+func (e *NotFoundError) Unwrap() error { return e.APIError }
+
+// errorForResponse maps a non-2xx HTTP status to a typed error: AuthError
+// (401), ForbiddenError (403), NotFoundError (404), or the generic APIError
+// for anything else. Every request path returns through this so callers can
+// rely on errors.As matching consistently, regardless of which method failed.
+func errorForResponse(statusCode int, body string) error {
+	base := &APIError{StatusCode: statusCode, Body: body}
+	switch statusCode {
+	case http.StatusUnauthorized:
+		return &AuthError{base}
+	case http.StatusForbidden:
+		return &ForbiddenError{base}
+	case http.StatusNotFound:
+		return &NotFoundError{base}
+	default:
+		return base
+	}
+}
+
 // SecretNotFoundError is returned by GetSecretScoped when no secret in the
 // given project+environment scope has the requested name.
 type SecretNotFoundError struct {
@@ -249,7 +292,7 @@ func Login(ctx context.Context, serverURL, username, password string) (string, e
 
 	respBody, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode != http.StatusOK {
-		return "", &APIError{StatusCode: resp.StatusCode, Body: string(respBody)}
+		return "", errorForResponse(resp.StatusCode, string(respBody))
 	}
 
 	var result struct {
@@ -347,12 +390,9 @@ func (c *Client) ListSecretsScoped(ctx context.Context, project ProjectRef, envi
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode == http.StatusUnauthorized {
-		return nil, fmt.Errorf("keyorix: unauthorized — check your token")
-	}
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
-		return nil, &APIError{StatusCode: resp.StatusCode, Body: string(body)}
+		return nil, errorForResponse(resp.StatusCode, string(body))
 	}
 
 	var result struct {
@@ -466,7 +506,7 @@ func (c *Client) getSecretValue(ctx context.Context, secretID uint) (string, err
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
-		return "", &APIError{StatusCode: resp.StatusCode, Body: string(body)}
+		return "", errorForResponse(resp.StatusCode, string(body))
 	}
 
 	var result struct {
@@ -516,7 +556,7 @@ func (c *Client) ListProjects(ctx context.Context) ([]Project, error) {
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
-		return nil, &APIError{StatusCode: resp.StatusCode, Body: string(body)}
+		return nil, errorForResponse(resp.StatusCode, string(body))
 	}
 
 	var result struct {
@@ -548,7 +588,7 @@ func (c *Client) CreateProject(ctx context.Context, name, description string) (*
 
 	if resp.StatusCode != http.StatusCreated && resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
-		return nil, &APIError{StatusCode: resp.StatusCode, Body: string(body)}
+		return nil, errorForResponse(resp.StatusCode, string(body))
 	}
 
 	var result struct {
@@ -577,7 +617,7 @@ func (c *Client) ListEnvironments(ctx context.Context, projectID uint) ([]Enviro
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
-		return nil, &APIError{StatusCode: resp.StatusCode, Body: string(body)}
+		return nil, errorForResponse(resp.StatusCode, string(body))
 	}
 
 	var result struct {

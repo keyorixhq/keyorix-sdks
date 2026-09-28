@@ -1,7 +1,16 @@
 'use strict';
 
 const http = require('node:http');
-const { Client, login, KeyorixError, AuthError, SecretNotFoundError, AmbiguousSecretError } = require('./keyorix');
+const {
+  Client,
+  login,
+  KeyorixError,
+  AuthError,
+  ForbiddenError,
+  NotFoundError,
+  SecretNotFoundError,
+  AmbiguousSecretError,
+} = require('./keyorix');
 
 let passed = 0;
 let failed = 0;
@@ -74,6 +83,34 @@ async function runTests() {
     }
   } finally {
     fakeServer.close();
+  }
+
+  // Typed error mapping: every request path returns a typed error that
+  // `instanceof` can distinguish for the three statuses callers most need
+  // to branch on, not just one generic KeyorixError.
+  for (const [status, ErrorClass, label] of [
+    [401, AuthError, 'AuthError'],
+    [403, ForbiddenError, 'ForbiddenError'],
+    [404, NotFoundError, 'NotFoundError'],
+  ]) {
+    const statusServer = http.createServer((req, res) => {
+      res.writeHead(status);
+      res.end();
+    });
+    await new Promise((resolve) => statusServer.listen(0, resolve));
+    try {
+      const port = statusServer.address().port;
+      const badClient = new Client(`http://localhost:${port}`, 'tok');
+      try {
+        await badClient.listProjects();
+        assert(false, `listProjects should have thrown on ${status}`);
+      } catch (e) {
+        assert(e instanceof ErrorClass, `HTTP ${status} maps to ${label}`);
+        assert(e.statusCode === status, `${label}.statusCode carries ${status}`);
+      }
+    } finally {
+      statusServer.close();
+    }
   }
 
   // Deprecated environment-only methods: removed in v0.3.0, must never hit the network.
@@ -178,6 +215,68 @@ async function runTests() {
       assert(byId.length === 1 && byId[0].id === 1, 'listSecretsScoped by numeric IDs works');
     } finally {
       scopedSrv.close();
+    }
+  }
+
+  // TLS with a private CA: proves the `ca` client option actually gets
+  // verified against, not just plumbed through and ignored. Uses a
+  // throwaway self-signed cert (openssl) as its own private CA. Skips
+  // gracefully if openssl isn't on PATH (matches the "skip when absent,
+  // real failure when present" convention used for the server-gated
+  // integration tests below).
+  {
+    const { execFileSync } = require('node:child_process');
+    const os = require('node:os');
+    const path = require('node:path');
+    const fs = require('node:fs');
+    let opensslAvailable = true;
+    try {
+      execFileSync('openssl', ['version'], { stdio: 'ignore' });
+    } catch {
+      opensslAvailable = false;
+    }
+
+    if (!opensslAvailable) {
+      console.log('  (skipped: openssl not on PATH) TLS with a private CA');
+    } else {
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'keyorix-tls-test-'));
+      const keyPath = path.join(dir, 'key.pem');
+      const certPath = path.join(dir, 'cert.pem');
+      execFileSync('openssl', [
+        'req', '-x509', '-newkey', 'rsa:2048', '-nodes',
+        '-keyout', keyPath, '-out', certPath,
+        '-days', '1', '-subj', '/CN=localhost',
+      ], { stdio: 'ignore' });
+      const key = fs.readFileSync(keyPath);
+      const cert = fs.readFileSync(certPath);
+
+      const https = require('node:https');
+      const tlsServer = https.createServer({ key, cert }, (req, res) => {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ status: 'healthy' }));
+      });
+      await new Promise((resolve) => tlsServer.listen(0, resolve));
+      const port = tlsServer.address().port;
+
+      try {
+        const untrusted = new Client(`https://localhost:${port}`, 'tok');
+        try {
+          await untrusted.health();
+          assert(false, 'expected an untrusted self-signed cert to be rejected by default');
+        } catch (e) {
+          assert(
+            /self.signed|unable to verify|certificate/i.test(e.message),
+            `TLS verification stays on by default (rejected self-signed cert): ${e.message}`
+          );
+        }
+
+        const trusted = new Client(`https://localhost:${port}`, 'tok', { ca: cert });
+        const ok = await trusted.health();
+        assert(ok === true, 'health() succeeds once the private CA is supplied via the ca option');
+      } finally {
+        tlsServer.close();
+        fs.rmSync(dir, { recursive: true, force: true });
+      }
     }
   }
 

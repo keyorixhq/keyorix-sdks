@@ -44,6 +44,25 @@ class AuthError extends KeyorixError {
   }
 }
 
+// Thrown when the server rejects a request as unauthorized for this
+// token's permissions (HTTP 403).
+class ForbiddenError extends KeyorixError {
+  constructor(message, opts) {
+    super(message, opts);
+    this.name = 'ForbiddenError';
+  }
+}
+
+// Thrown when a requested resource does not exist on the server (HTTP
+// 404). Distinct from SecretNotFoundError, which is thrown by name-based
+// resolution before any such request is made.
+class NotFoundError extends KeyorixError {
+  constructor(message, opts) {
+    super(message, opts);
+    this.name = 'NotFoundError';
+  }
+}
+
 class SecretNotFoundError extends KeyorixError {
   constructor(message, opts) {
     super(message, opts);
@@ -60,6 +79,19 @@ class AmbiguousSecretError extends KeyorixError {
     this.name = 'AmbiguousSecretError';
     this.ids = ids;
   }
+}
+
+// Maps a non-2xx HTTP status to a typed error: AuthError (401),
+// ForbiddenError (403), NotFoundError (404), or the generic KeyorixError
+// for anything else. Every request path returns through this so callers
+// can rely on `instanceof` matching consistently, regardless of which
+// method failed.
+function errorForResponse(status, body) {
+  const opts = { statusCode: status, responseBody: body };
+  if (status === 401) return new AuthError('Unauthorized — check your token', opts);
+  if (status === 403) return new ForbiddenError('Forbidden — token lacks permission for this request', opts);
+  if (status === 404) return new NotFoundError('Resource not found', opts);
+  return new KeyorixError(`Server returned ${status}`, opts);
 }
 
 // ── HTTP helper ──────────────────────────────────────────────────────────────
@@ -166,6 +198,9 @@ class Client {
    * @param {string} token - Session token
    * @param {object} [opts]
    * @param {number} [opts.timeout=30000] - Timeout in milliseconds
+   * @param {string|Buffer|Array<string|Buffer>} [opts.ca] - Trusted CA
+   *   certificate(s) (PEM), for servers using a private/internal CA. Passed
+   *   straight through to Node's https.request; no effect on plain http://.
    */
   constructor(serverUrl, token, opts = {}) {
     validateServerUrl(serverUrl);
@@ -173,6 +208,7 @@ class Client {
     this._token = token;
     this._timeout = opts.timeout || 30000;
     this._parsed = parseUrl(this._base);
+    if (opts.ca) this._parsed.ca = opts.ca;
     // Populated lazily by _resolveProject/_resolveEnvironment and never
     // invalidated for the lifetime of this Client -- a project/environment
     // rename mid-process is expected to be rare enough that a fresh Client
@@ -197,9 +233,8 @@ class Client {
       throw new KeyorixError(`Request failed: ${err.message}`);
     }
 
-    if (resp.status === 401) throw new AuthError('Unauthorized — check your token');
     if (resp.status !== 200) {
-      throw new KeyorixError(`Server returned ${resp.status}`, { statusCode: resp.status, responseBody: resp.body });
+      throw errorForResponse(resp.status, resp.body);
     }
 
     return JSON.parse(resp.body);
@@ -389,7 +424,7 @@ class Client {
       throw new KeyorixError(`Request failed: ${err.message}`);
     }
     if (resp.status !== 200 && resp.status !== 201) {
-      throw new KeyorixError(`Server returned ${resp.status}`, { statusCode: resp.status, responseBody: resp.body });
+      throw errorForResponse(resp.status, resp.body);
     }
     const p = JSON.parse(resp.body)?.data || {};
     return { id: p.id, name: p.name, description: p.description, createdAt: p.created_at };
@@ -408,4 +443,13 @@ class Client {
   }
 }
 
-module.exports = { Client, login, KeyorixError, AuthError, SecretNotFoundError, AmbiguousSecretError };
+module.exports = {
+  Client,
+  login,
+  KeyorixError,
+  AuthError,
+  ForbiddenError,
+  NotFoundError,
+  SecretNotFoundError,
+  AmbiguousSecretError,
+};

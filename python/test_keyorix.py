@@ -88,6 +88,99 @@ class TestClient(unittest.TestCase):
         self.assertEqual(ctx.exception.response_body, raw)
         self.assertEqual(ctx.exception.status_code, 500)
 
+    # ── Typed error mapping ─────────────────────────────────────────────────────
+    # Every request path raises a typed error that isinstance() can
+    # distinguish for the three statuses callers most need to branch on,
+    # not just one generic KeyorixError.
+
+    @patch("keyorix.urllib.request.urlopen")
+    def test_401_maps_to_auth_error(self, mock_urlopen):
+        mock_urlopen.side_effect = urllib.error.HTTPError(
+            "http://localhost:8080/api/v1/secrets", 401, "Unauthorized", {}, io.BytesIO(b"")
+        )
+        client = keyorix.Client("http://localhost:8080", "test-token")
+        with self.assertRaises(keyorix.AuthError) as ctx:
+            client._request("GET", "/api/v1/secrets")
+        self.assertEqual(ctx.exception.status_code, 401)
+
+    @patch("keyorix.urllib.request.urlopen")
+    def test_403_maps_to_forbidden_error(self, mock_urlopen):
+        mock_urlopen.side_effect = urllib.error.HTTPError(
+            "http://localhost:8080/api/v1/secrets", 403, "Forbidden", {}, io.BytesIO(b"")
+        )
+        client = keyorix.Client("http://localhost:8080", "test-token")
+        with self.assertRaises(keyorix.ForbiddenError) as ctx:
+            client._request("GET", "/api/v1/secrets")
+        self.assertEqual(ctx.exception.status_code, 403)
+
+    @patch("keyorix.urllib.request.urlopen")
+    def test_404_maps_to_not_found_error(self, mock_urlopen):
+        mock_urlopen.side_effect = urllib.error.HTTPError(
+            "http://localhost:8080/api/v1/secrets", 404, "Not Found", {}, io.BytesIO(b"")
+        )
+        client = keyorix.Client("http://localhost:8080", "test-token")
+        with self.assertRaises(keyorix.NotFoundError) as ctx:
+            client._request("GET", "/api/v1/secrets")
+        self.assertEqual(ctx.exception.status_code, 404)
+
+    # ── TLS with a private CA ───────────────────────────────────────────────────
+    # Proves the ca_file option actually gets verified against, not just
+    # plumbed through and ignored. Uses a throwaway self-signed cert
+    # (openssl) as its own private CA. Skipped gracefully if openssl isn't
+    # on PATH.
+
+    def test_tls_private_ca(self):
+        import http.server
+        import shutil
+        import ssl as ssl_module
+        import subprocess
+        import tempfile
+        import threading
+        import os
+
+        if shutil.which("openssl") is None:
+            self.skipTest("openssl not on PATH")
+
+        with tempfile.TemporaryDirectory() as d:
+            key_path = os.path.join(d, "key.pem")
+            cert_path = os.path.join(d, "cert.pem")
+            subprocess.run(
+                [
+                    "openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes",
+                    "-keyout", key_path, "-out", cert_path,
+                    "-days", "1", "-subj", "/CN=localhost",
+                ],
+                check=True, capture_output=True,
+            )
+
+            class _Handler(http.server.BaseHTTPRequestHandler):
+                def log_message(self, *args):
+                    pass
+
+                def do_GET(self):
+                    body = b'{"status":"healthy"}'
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/json")
+                    self.end_headers()
+                    self.wfile.write(body)
+
+            httpd = http.server.HTTPServer(("localhost", 0), _Handler)
+            server_ctx = ssl_module.SSLContext(ssl_module.PROTOCOL_TLS_SERVER)
+            server_ctx.load_cert_chain(cert_path, key_path)
+            httpd.socket = server_ctx.wrap_socket(httpd.socket, server_side=True)
+            port = httpd.server_address[1]
+            thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+            thread.start()
+            try:
+                untrusted = keyorix.Client(f"https://localhost:{port}", "tok")
+                with self.assertRaises(keyorix.KeyorixError):
+                    untrusted.health()
+
+                trusted = keyorix.Client(f"https://localhost:{port}", "tok", ca_file=cert_path)
+                self.assertTrue(trusted.health())
+            finally:
+                httpd.shutdown()
+
     # ── Deprecated environment-only methods: removed in v0.3.0 ─────────────────
 
     @patch("keyorix.urllib.request.urlopen")
