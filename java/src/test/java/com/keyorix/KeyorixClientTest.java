@@ -160,8 +160,8 @@ class KeyorixClientTest {
     @Test
     void testJsonParser_parseSecretList() {
         String json = "{\"data\":{\"secrets\":[" +
-            "{\"ID\":1,\"Name\":\"db-password\",\"Type\":\"password\",\"environment_name\":\"production\",\"ProjectID\":1,\"CreatedAt\":\"2026-01-01\"}," +
-            "{\"ID\":2,\"Name\":\"api-key\",\"Type\":\"generic\",\"environment_name\":\"staging\",\"ProjectID\":2,\"CreatedAt\":\"2026-01-02\"}" +
+            "{\"id\":1,\"name\":\"db-password\",\"type\":\"password\",\"environment_name\":\"production\",\"project_id\":1,\"created_at\":\"2026-01-01\"}," +
+            "{\"id\":2,\"name\":\"api-key\",\"type\":\"generic\",\"environment_name\":\"staging\",\"project_id\":2,\"created_at\":\"2026-01-02\"}" +
             "]}}";
         java.util.List<Secret> secrets = JsonParser.parseSecretList(json);
         assertEquals(2, secrets.size());

@@ -273,12 +273,12 @@ class Client {
     const path = `/api/v1/secrets?project_id=${projectId}&environment_id=${envId}`;
     const data = await this._request(path);
     return (data?.data?.secrets || []).map((s) => ({
-      id: s.ID,
-      name: s.Name,
-      type: s.Type,
-      projectId: s.ProjectID,
+      id: s.id,
+      name: s.name,
+      type: s.type,
+      projectId: s.project_id,
       environment: s.environment_name,
-      createdAt: s.CreatedAt,
+      createdAt: s.created_at,
     }));
   }
 
@@ -361,7 +361,7 @@ class Client {
   async listProjects() {
     const data = await this._request('/api/v1/projects');
     return (data?.data?.projects || []).map((p) => ({
-      id: p.ID, name: p.Name, description: p.Description, createdAt: p.CreatedAt,
+      id: p.id, name: p.name, description: p.description, createdAt: p.created_at,
     }));
   }
 
@@ -392,7 +392,7 @@ class Client {
       throw new KeyorixError(`Server returned ${resp.status}`, { statusCode: resp.status, responseBody: resp.body });
     }
     const p = JSON.parse(resp.body)?.data || {};
-    return { id: p.ID, name: p.Name, description: p.Description, createdAt: p.CreatedAt };
+    return { id: p.id, name: p.name, description: p.description, createdAt: p.created_at };
   }
 
   /**
@@ -403,7 +403,7 @@ class Client {
   async listEnvironments(projectId) {
     const data = await this._request(`/api/v1/projects/${projectId}/environments`);
     return (data?.data?.environments || []).map((e) => ({
-      id: e.ID, projectId: e.ProjectID, name: e.Name,
+      id: e.id, projectId: e.project_id, name: e.name,
     }));
   }
 }

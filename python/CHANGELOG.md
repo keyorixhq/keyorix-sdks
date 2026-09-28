@@ -4,6 +4,18 @@ All notable changes to the Python SDK are documented here.
 
 ## v0.3.0 (unreleased)
 
+### Fixed
+
+- **`Secret`/`Project`/`Environment` wire field reads updated to snake_case**
+  (`id`, `name`, `project_id`, `created_at`, `description`, `type`), matching
+  the server's current response shape since keyorixhq/keyorix#2098 and #2128
+  (both merged 2026-09-26). `dict.get(key, default)` was the worst-case
+  failure mode of any SDK here — every field of these three types silently
+  fell back to its default (`0`/`""`) on `main`, not even a `KeyError`.
+  Proven red without this fix / green with it via
+  `python/test_keyorix_contract.py` against a real server built from
+  keyorix `main`.
+
 ### Breaking
 
 - **`get_secret`/`list_secrets` (environment-only) removed.** An environment

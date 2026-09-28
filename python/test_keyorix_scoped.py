@@ -17,11 +17,11 @@ import keyorix
 PROJECTS = {"proj-a": 10, "proj-b": 20}
 ENVIRONMENTS = {10: {"prod": 101}, 20: {"prod": 201}}
 SECRETS = {
-    (10, 101): [{"ID": 1, "Name": "db-password"}],
+    (10, 101): [{"id": 1, "name": "db-password"}],
     (20, 201): [
-        {"ID": 2, "Name": "db-password"},
-        {"ID": 3, "Name": "ambiguous-secret"},
-        {"ID": 4, "Name": "ambiguous-secret"},
+        {"id": 2, "name": "db-password"},
+        {"id": 3, "name": "ambiguous-secret"},
+        {"id": 4, "name": "ambiguous-secret"},
     ],
 }
 VALUES = {1: "secret-a", 2: "secret-b"}
@@ -44,14 +44,14 @@ class _Handler(BaseHTTPRequestHandler):
 
         if parsed.path == "/api/v1/projects":
             self.server.calls.append("projects")
-            self._json({"projects": [{"ID": v, "Name": k} for k, v in PROJECTS.items()]})
+            self._json({"projects": [{"id": v, "name": k} for k, v in PROJECTS.items()]})
             return
 
         if parsed.path.endswith("/environments"):
             project_id = int(parsed.path.split("/")[4])
             self.server.calls.append(f"environments:{project_id}")
             envs = ENVIRONMENTS.get(project_id, {})
-            self._json({"environments": [{"ID": v, "Name": k, "ProjectID": project_id} for k, v in envs.items()]})
+            self._json({"environments": [{"id": v, "name": k, "project_id": project_id} for k, v in envs.items()]})
             return
 
         if parsed.path == "/api/v1/secrets":

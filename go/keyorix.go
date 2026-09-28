@@ -40,27 +40,27 @@ type Client struct {
 
 // Secret represents a secret returned by the API.
 type Secret struct {
-	ID          uint      `json:"ID"`
-	Name        string    `json:"Name"`
-	Type        string    `json:"Type"`
-	ProjectID   uint      `json:"ProjectID"`
+	ID          uint      `json:"id"`
+	Name        string    `json:"name"`
+	Type        string    `json:"type"`
+	ProjectID   uint      `json:"project_id"`
 	Environment string    `json:"environment_name"`
-	CreatedAt   time.Time `json:"CreatedAt"`
+	CreatedAt   time.Time `json:"created_at"`
 }
 
 // Project represents a Keyorix project.
 type Project struct {
-	ID          uint      `json:"ID"`
-	Name        string    `json:"Name"`
-	Description string    `json:"Description"`
-	CreatedAt   time.Time `json:"CreatedAt"`
+	ID          uint      `json:"id"`
+	Name        string    `json:"name"`
+	Description string    `json:"description"`
+	CreatedAt   time.Time `json:"created_at"`
 }
 
 // Environment represents an environment scoped to a project.
 type Environment struct {
-	ID        uint   `json:"ID"`
-	ProjectID uint   `json:"ProjectID"`
-	Name      string `json:"Name"`
+	ID        uint   `json:"id"`
+	ProjectID uint   `json:"project_id"`
+	Name      string `json:"name"`
 }
 
 // SecretValue contains the decrypted value of a secret.

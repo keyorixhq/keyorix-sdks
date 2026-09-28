@@ -26,12 +26,12 @@ class TestClient(unittest.TestCase):
 
     def test_secret_from_dict(self):
         data = {
-            "ID": 1,
-            "Name": "db-password",
-            "Type": "password",
+            "id": 1,
+            "name": "db-password",
+            "type": "password",
             "environment_name": "production",
-            "ProjectID": 1,
-            "CreatedAt": "2026-04-19T00:00:00Z",
+            "project_id": 1,
+            "created_at": "2026-04-19T00:00:00Z",
         }
         secret = keyorix.Secret._from_dict(data)
         self.assertEqual(secret.id, 1)

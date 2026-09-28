@@ -38,21 +38,21 @@ class ScopedKeyorixClientTest {
                 return;
             }
             projectListCalls.incrementAndGet();
-            json(exchange, "{\"data\":{\"projects\":[{\"ID\":10,\"Name\":\"proj-a\"},{\"ID\":20,\"Name\":\"proj-b\"}]}}");
+            json(exchange, "{\"data\":{\"projects\":[{\"id\":10,\"name\":\"proj-a\"},{\"id\":20,\"name\":\"proj-b\"}]}}");
         });
         server.createContext("/api/v1/projects/10/environments", exchange ->
-            json(exchange, "{\"data\":{\"environments\":[{\"ID\":101,\"Name\":\"prod\",\"ProjectID\":10}]}}"));
+            json(exchange, "{\"data\":{\"environments\":[{\"id\":101,\"name\":\"prod\",\"project_id\":10}]}}"));
         server.createContext("/api/v1/projects/20/environments", exchange ->
-            json(exchange, "{\"data\":{\"environments\":[{\"ID\":201,\"Name\":\"prod\",\"ProjectID\":20}]}}"));
+            json(exchange, "{\"data\":{\"environments\":[{\"id\":201,\"name\":\"prod\",\"project_id\":20}]}}"));
         server.createContext("/api/v1/secrets", exchange -> {
             String query = exchange.getRequestURI().getQuery();
             if (query != null && query.contains("project_id=10") && query.contains("environment_id=101")) {
-                json(exchange, "{\"data\":{\"secrets\":[{\"ID\":1,\"Name\":\"db-password\"}]}}");
+                json(exchange, "{\"data\":{\"secrets\":[{\"id\":1,\"name\":\"db-password\"}]}}");
             } else if (query != null && query.contains("project_id=20") && query.contains("environment_id=201")) {
                 json(exchange, "{\"data\":{\"secrets\":["
-                    + "{\"ID\":2,\"Name\":\"db-password\"},"
-                    + "{\"ID\":3,\"Name\":\"ambiguous-secret\"},"
-                    + "{\"ID\":4,\"Name\":\"ambiguous-secret\"}"
+                    + "{\"id\":2,\"name\":\"db-password\"},"
+                    + "{\"id\":3,\"name\":\"ambiguous-secret\"},"
+                    + "{\"id\":4,\"name\":\"ambiguous-secret\"}"
                     + "]}}");
             } else {
                 notFound(exchange);

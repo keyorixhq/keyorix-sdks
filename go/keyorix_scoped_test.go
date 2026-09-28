@@ -18,24 +18,24 @@ func scopedTestServer(t *testing.T) *httptest.Server {
 	t.Helper()
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/v1/projects", func(w http.ResponseWriter, _ *http.Request) {
-		_, _ = w.Write([]byte(`{"data":{"projects":[{"ID":10,"Name":"proj-a"},{"ID":20,"Name":"proj-b"}]}}`))
+		_, _ = w.Write([]byte(`{"data":{"projects":[{"id":10,"name":"proj-a"},{"id":20,"name":"proj-b"}]}}`))
 	})
 	mux.HandleFunc("/api/v1/projects/10/environments", func(w http.ResponseWriter, _ *http.Request) {
-		_, _ = w.Write([]byte(`{"data":{"environments":[{"ID":101,"Name":"prod","ProjectID":10}]}}`))
+		_, _ = w.Write([]byte(`{"data":{"environments":[{"id":101,"name":"prod","project_id":10}]}}`))
 	})
 	mux.HandleFunc("/api/v1/projects/20/environments", func(w http.ResponseWriter, _ *http.Request) {
-		_, _ = w.Write([]byte(`{"data":{"environments":[{"ID":201,"Name":"prod","ProjectID":20}]}}`))
+		_, _ = w.Write([]byte(`{"data":{"environments":[{"id":201,"name":"prod","project_id":20}]}}`))
 	})
 	mux.HandleFunc("/api/v1/secrets", func(w http.ResponseWriter, r *http.Request) {
 		q := r.URL.Query()
 		switch {
 		case q.Get("project_id") == "10" && q.Get("environment_id") == "101":
-			_, _ = w.Write([]byte(`{"data":{"secrets":[{"ID":1,"Name":"db-password"}]}}`))
+			_, _ = w.Write([]byte(`{"data":{"secrets":[{"id":1,"name":"db-password"}]}}`))
 		case q.Get("project_id") == "20" && q.Get("environment_id") == "201":
 			_, _ = w.Write([]byte(`{"data":{"secrets":[` +
-				`{"ID":2,"Name":"db-password"},` +
-				`{"ID":3,"Name":"ambiguous-secret"},` +
-				`{"ID":4,"Name":"ambiguous-secret"}` +
+				`{"id":2,"name":"db-password"},` +
+				`{"id":3,"name":"ambiguous-secret"},` +
+				`{"id":4,"name":"ambiguous-secret"}` +
 				`]}}`))
 		default:
 			w.WriteHeader(http.StatusNotFound)
@@ -152,10 +152,10 @@ func TestResolveProject_CachesAcrossCalls(t *testing.T) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/v1/projects", func(w http.ResponseWriter, _ *http.Request) {
 		projectListCalls++
-		_, _ = w.Write([]byte(`{"data":{"projects":[{"ID":10,"Name":"proj-a"}]}}`))
+		_, _ = w.Write([]byte(`{"data":{"projects":[{"id":10,"name":"proj-a"}]}}`))
 	})
 	mux.HandleFunc("/api/v1/projects/10/environments", func(w http.ResponseWriter, _ *http.Request) {
-		_, _ = w.Write([]byte(`{"data":{"environments":[{"ID":101,"Name":"prod","ProjectID":10}]}}`))
+		_, _ = w.Write([]byte(`{"data":{"environments":[{"id":101,"name":"prod","project_id":10}]}}`))
 	})
 	mux.HandleFunc("/api/v1/secrets", func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write([]byte(`{"data":{"secrets":[]}}`))

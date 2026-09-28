@@ -109,9 +109,9 @@ async function runTests() {
   // "db-password" secret.
   {
     const routes = {
-      '/api/v1/projects': { projects: [{ ID: 10, Name: 'proj-a' }, { ID: 20, Name: 'proj-b' }] },
-      '/api/v1/projects/10/environments': { environments: [{ ID: 101, Name: 'prod', ProjectID: 10 }] },
-      '/api/v1/projects/20/environments': { environments: [{ ID: 201, Name: 'prod', ProjectID: 20 }] },
+      '/api/v1/projects': { projects: [{ id: 10, name: 'proj-a' }, { id: 20, name: 'proj-b' }] },
+      '/api/v1/projects/10/environments': { environments: [{ id: 101, name: 'prod', project_id: 10 }] },
+      '/api/v1/projects/20/environments': { environments: [{ id: 201, name: 'prod', project_id: 20 }] },
       '/api/v1/secrets/1': { value: 'secret-a' },
       '/api/v1/secrets/2': { value: 'secret-b' },
     };
@@ -121,12 +121,12 @@ async function runTests() {
         const pid = url.searchParams.get('project_id');
         const eid = url.searchParams.get('environment_id');
         let secrets = [];
-        if (pid === '10' && eid === '101') secrets = [{ ID: 1, Name: 'db-password' }];
+        if (pid === '10' && eid === '101') secrets = [{ id: 1, name: 'db-password' }];
         if (pid === '20' && eid === '201') {
           secrets = [
-            { ID: 2, Name: 'db-password' },
-            { ID: 3, Name: 'ambiguous-secret' },
-            { ID: 4, Name: 'ambiguous-secret' },
+            { id: 2, name: 'db-password' },
+            { id: 3, name: 'ambiguous-secret' },
+            { id: 4, name: 'ambiguous-secret' },
           ];
         }
         res.writeHead(200, { 'Content-Type': 'application/json' });
