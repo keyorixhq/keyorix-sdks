@@ -22,8 +22,18 @@ Add to your `pom.xml`:
 import com.keyorix.Keyorix;
 import com.keyorix.KeyorixClient;
 
-String token = Keyorix.login("https://your-server:8443", "admin", "password");
-KeyorixClient client = Keyorix.newClient("https://your-server:8443", token);
+// Recommended for apps: a machine identity token, not a user password.
+// Issue one via `keyorix machine token issue <name|id>` (or the web UI's
+// Project -> Machine Identities -> Issue Token), then load it from your
+// app's secret store / env var -- never hardcode it.
+KeyorixClient client = Keyorix.newClient("https://your-server:8443", System.getenv("KEYORIX_TOKEN"));
+
+// A personal access token (PAT) works exactly the same way -- pass it as
+// the token above. Password login (below) is for humans at a terminal,
+// not for baking into an application.
+//
+//   String token = Keyorix.login("https://your-server:8443", "admin", "your-password");
+//   KeyorixClient client = Keyorix.newClient("https://your-server:8443", token);
 
 // Scoped to a project + environment -- an environment name is only unique
 // within one project, not globally.
@@ -43,8 +53,13 @@ String dbPassword = client.getSecretScoped("db-password", "my-project", "product
 
 ## API
 
-- Keyorix.login(serverUrl, username, password) -> String
-- Keyorix.newClient(serverUrl, token) -> KeyorixClient
+- Keyorix.newClient(serverUrl, token) -> KeyorixClient — `token` is a
+  machine identity token, a PAT, or a session token; the server accepts
+  all three identically. For an app running unattended, prefer a machine
+  identity token over a user's password.
+- Keyorix.login(serverUrl, username, password) -> String — authenticates
+  with a human's username/password. For interactive use, not for an
+  application's long-running credential.
 - client.getSecretScoped(name, project, environment) -> String
 - client.listSecretsScoped(project, environment) -> List<Secret>
 - client.health() -> boolean

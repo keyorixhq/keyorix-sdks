@@ -17,6 +17,7 @@ import (
     "context"
     "fmt"
     "log"
+    "os"
 
     keyorix "github.com/keyorixhq/keyorix-sdks/go"
 )
@@ -24,21 +25,21 @@ import (
 func main() {
     ctx := context.Background()
 
-    // Option 1: use a token directly
-    client, err := keyorix.New("https://your-server:8443", "your-session-token")
+    // Recommended for apps: a machine identity token, not a user password.
+    // Issue one via `keyorix machine token issue <name|id>` (or the web
+    // UI's Project -> Machine Identities -> Issue Token), then load it
+    // from your app's secret store / env var -- never hardcode it.
+    client, err := keyorix.New("https://your-server:8443", os.Getenv("KEYORIX_TOKEN"))
     if err != nil {
         log.Fatal(err)
     }
 
-    // Option 2: log in with username/password
-    token, err := keyorix.Login(ctx, "https://your-server:8443", "admin", "your-password")
-    if err != nil {
-        log.Fatal(err)
-    }
-    client, err = keyorix.New("https://your-server:8443", token)
-    if err != nil {
-        log.Fatal(err)
-    }
+    // A personal access token (PAT) works exactly the same way -- pass it
+    // as the token to keyorix.New. Password login (below) is for humans at
+    // a terminal, not for baking into an application.
+    //
+    //   token, err := keyorix.Login(ctx, "https://your-server:8443", "admin", "your-password")
+    //   client, err = keyorix.New("https://your-server:8443", token)
 
     // Get a secret value — scoped to a project + environment, since an
     // environment name is only unique within one project, not globally.
@@ -65,14 +66,17 @@ func main() {
 
 ### `keyorix.New(serverURL, token string, opts ...Option) (*Client, error)`
 Creates a new client. `serverURL` must use `https://` (`http://` is only accepted
-for localhost/loopback). Get a token via `keyorix.Login()` or from the Keyorix CLI:
-```bash
-keyorix connect https://your-server --username admin --password your-password
-# Token is saved in ~/.keyorix/cli.yaml
-```
+for localhost/loopback). `token` can be a machine identity token, a personal
+access token (PAT), or a session token — the server accepts all three
+identically. For an app running unattended, issue a machine identity token
+(`keyorix machine token issue <name|id>`, or the web UI's Project -> Machine
+Identities -> Issue Token) and load it from your app's own secret store or
+environment — that's the recommended shape, not a user's password.
 
 ### `keyorix.Login(ctx, serverURL, username, password string) (string, error)`
-Authenticates and returns a session token. Use this to avoid hardcoding tokens.
+Authenticates with a human's username/password and returns a session token.
+For interactive use (a developer at a terminal, the CLI's own login flow) —
+not for an application's long-running credential.
 
 ### `client.GetSecretScoped(ctx, name string, project ProjectRef, environment EnvironmentRef) (string, error)`
 Returns the plaintext value of a secret by name, within one project's environment.
