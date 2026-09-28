@@ -1,10 +1,12 @@
 package com.keyorix;
 
 import com.sun.net.httpserver.HttpServer;
+import java.io.FileInputStream;
 import java.io.IOException;
 import java.io.OutputStream;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
+import java.security.KeyStore;
 import org.junit.jupiter.api.Test;
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -89,6 +91,129 @@ class KeyorixClientTest {
             assertEquals(500, ex.getStatusCode());
         } finally {
             server.stop(0);
+        }
+    }
+
+    // ── Typed error mapping ─────────────────────────────────────────────────────
+    // Every request path throws a typed exception that assertThrows can
+    // distinguish for the three statuses callers most need to catch, not
+    // just one generic KeyorixException.
+
+    @Test
+    void test401MapsToAuthException() throws IOException, KeyorixException {
+        assertStatusMapsTo(401, AuthException.class);
+    }
+
+    @Test
+    void test403MapsToForbiddenException() throws IOException, KeyorixException {
+        assertStatusMapsTo(403, ForbiddenException.class);
+    }
+
+    @Test
+    void test404MapsToNotFoundException() throws IOException, KeyorixException {
+        assertStatusMapsTo(404, NotFoundException.class);
+    }
+
+    private void assertStatusMapsTo(int status, Class<? extends KeyorixException> expected) throws IOException, KeyorixException {
+        HttpServer server = HttpServer.create(new InetSocketAddress("localhost", 0), 0);
+        server.createContext("/api/v1/projects", exchange -> {
+            exchange.sendResponseHeaders(status, -1);
+            exchange.close();
+        });
+        server.start();
+        try {
+            KeyorixClient client = new KeyorixClient("http://localhost:" + server.getAddress().getPort(), "test-token");
+            KeyorixException ex = assertThrows(expected, () -> client.listProjects());
+            assertEquals(status, ex.getStatusCode());
+        } finally {
+            server.stop(0);
+        }
+    }
+
+    // ── TLS with a private CA ───────────────────────────────────────────────────
+    // Proves the caCertPath constructor option actually gets verified
+    // against, not just plumbed through and ignored. Uses a throwaway
+    // self-signed cert (openssl) as its own private CA. Skipped gracefully
+    // if openssl isn't on PATH.
+
+    @Test
+    void testTlsPrivateCa() throws Exception {
+        try {
+            new ProcessBuilder("openssl", "version").start().waitFor();
+        } catch (IOException e) {
+            return; // openssl not on PATH -- skip gracefully
+        }
+
+        java.nio.file.Path dir = java.nio.file.Files.createTempDirectory("keyorix-tls-test-");
+        java.nio.file.Path keyPath = dir.resolve("key.pem");
+        java.nio.file.Path certPath = dir.resolve("cert.pem");
+        try {
+            Process p = new ProcessBuilder(
+                "openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes",
+                "-keyout", keyPath.toString(), "-out", certPath.toString(),
+                "-days", "1", "-subj", "/CN=localhost"
+            ).redirectErrorStream(true).start();
+            p.waitFor();
+            assertEquals(0, p.exitValue(), "openssl cert generation failed");
+
+            com.sun.net.httpserver.HttpsServer server =
+                com.sun.net.httpserver.HttpsServer.create(new InetSocketAddress("localhost", 0), 0);
+            javax.net.ssl.SSLContext serverCtx = buildServerSslContext(keyPath, certPath);
+            server.setHttpsConfigurator(new com.sun.net.httpserver.HttpsConfigurator(serverCtx));
+            server.createContext("/health", exchange -> {
+                byte[] resp = "{\"status\":\"healthy\"}".getBytes(StandardCharsets.UTF_8);
+                exchange.sendResponseHeaders(200, resp.length);
+                try (OutputStream os = exchange.getResponseBody()) {
+                    os.write(resp);
+                }
+            });
+            server.start();
+            try {
+                int port = server.getAddress().getPort();
+                KeyorixClient untrusted = new KeyorixClient("https://localhost:" + port, "tok");
+                assertThrows(KeyorixException.class, untrusted::health,
+                    "expected an untrusted self-signed cert to be rejected by default");
+
+                KeyorixClient trusted = new KeyorixClient(
+                    "https://localhost:" + port, "tok", java.time.Duration.ofSeconds(30), certPath.toString());
+                assertTrue(trusted.health(), "health() should succeed once the private CA is supplied");
+            } finally {
+                server.stop(0);
+            }
+        } finally {
+            java.nio.file.Files.deleteIfExists(keyPath);
+            java.nio.file.Files.deleteIfExists(certPath);
+            java.nio.file.Files.deleteIfExists(dir);
+        }
+    }
+
+    private static javax.net.ssl.SSLContext buildServerSslContext(java.nio.file.Path keyPath, java.nio.file.Path certPath)
+            throws Exception {
+        // PKCS12 keystore built from the same openssl-generated key+cert, purely
+        // to hand to the test's embedded HttpsServer -- unrelated to the
+        // client-side trust logic under test in KeyorixClient itself.
+        java.nio.file.Path p12 = java.nio.file.Files.createTempFile("keyorix-tls-test-", ".p12");
+        try {
+            Process p = new ProcessBuilder(
+                "openssl", "pkcs12", "-export",
+                "-inkey", keyPath.toString(), "-in", certPath.toString(),
+                "-out", p12.toString(), "-passout", "pass:changeit", "-name", "server"
+            ).redirectErrorStream(true).start();
+            p.waitFor();
+            assertEquals(0, p.exitValue(), "openssl pkcs12 export failed");
+
+            KeyStore ks = KeyStore.getInstance("PKCS12");
+            try (FileInputStream fis = new FileInputStream(p12.toFile())) {
+                ks.load(fis, "changeit".toCharArray());
+            }
+            javax.net.ssl.KeyManagerFactory kmf =
+                javax.net.ssl.KeyManagerFactory.getInstance(javax.net.ssl.KeyManagerFactory.getDefaultAlgorithm());
+            kmf.init(ks, "changeit".toCharArray());
+            javax.net.ssl.SSLContext ctx = javax.net.ssl.SSLContext.getInstance("TLS");
+            ctx.init(kmf.getKeyManagers(), null, null);
+            return ctx;
+        } finally {
+            java.nio.file.Files.deleteIfExists(p12);
         }
     }
 

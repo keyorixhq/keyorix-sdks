@@ -4,6 +4,16 @@ All notable changes to the Node.js SDK are documented here.
 
 ## v0.3.0 (unreleased)
 
+### Added
+
+- `ForbiddenError` (403) and `NotFoundError` (404) exports, alongside the
+  existing `AuthError` (401) — every request path now throws a typed error
+  `instanceof` can distinguish, instead of one generic `KeyorixError` for
+  everything.
+- `Client` constructor option `opts.ca` — a PEM CA certificate (or array of
+  certificates) to trust, for servers using a private/internal CA. Passed
+  straight through to Node's `https.request`; no effect on plain `http://`.
+
 ### Fixed
 
 - **`Secret`/`Project`/`Environment` wire field reads updated to snake_case**

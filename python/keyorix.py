@@ -22,6 +22,7 @@ Quick start:
 
 import ipaddress
 import json
+import ssl
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -82,6 +83,41 @@ class AuthError(KeyorixError):
     """Raised on authentication failure."""
 
     pass
+
+
+class ForbiddenError(KeyorixError):
+    """Raised when the server rejects a request as unauthorized for this
+    token's permissions (HTTP 403).
+    """
+
+    pass
+
+
+class NotFoundError(KeyorixError):
+    """Raised when a requested resource does not exist on the server (HTTP
+    404). Distinct from SecretNotFoundError, which is raised by name-based
+    resolution before any such request is made.
+    """
+
+    pass
+
+
+def _error_for_response(status_code: int, body: str) -> KeyorixError:
+    """Maps a non-2xx HTTP status to a typed error: AuthError (401),
+    ForbiddenError (403), NotFoundError (404), or the generic KeyorixError
+    for anything else. Every request path raises through this so callers
+    can rely on isinstance() matching consistently, regardless of which
+    method failed.
+    """
+    if status_code == 401:
+        return AuthError("Unauthorized — check your token", status_code=status_code, response_body=body)
+    if status_code == 403:
+        return ForbiddenError(
+            "Forbidden — token lacks permission for this request", status_code=status_code, response_body=body
+        )
+    if status_code == 404:
+        return NotFoundError("Resource not found", status_code=status_code, response_body=body)
+    return KeyorixError(f"Server returned {status_code}", status_code=status_code, response_body=body)
 
 
 class SecretNotFoundError(KeyorixError):
@@ -205,13 +241,17 @@ class Client:
         server_url: Base URL of your Keyorix server
         token: Session token (obtain via keyorix.login() or CLI)
         timeout: Request timeout in seconds (default 30)
+        ca_file: Path to a PEM file of trusted CA certificate(s), for
+            servers using a private/internal CA. No effect on plain
+            http:// (loopback-only) connections.
     """
 
-    def __init__(self, server_url: str, token: str, timeout: int = 30):
+    def __init__(self, server_url: str, token: str, timeout: int = 30, ca_file: Optional[str] = None):
         _validate_server_url(server_url)
         self._base = server_url.rstrip("/")
         self._token = token
         self._timeout = timeout
+        self._ssl_context = ssl.create_default_context(cafile=ca_file) if ca_file else None
         # Populated lazily by _resolve_project/_resolve_environment and never
         # invalidated for the lifetime of this Client -- a project/environment
         # rename mid-process is expected to be rare enough that a fresh
@@ -226,13 +266,11 @@ class Client:
             method=method,
         )
         try:
-            with urllib.request.urlopen(req, timeout=self._timeout) as resp:
+            with urllib.request.urlopen(req, timeout=self._timeout, context=self._ssl_context) as resp:
                 return json.loads(resp.read())
         except urllib.error.HTTPError as e:
-            if e.code == 401:
-                raise AuthError("Unauthorized — check your token") from e
             body = e.read().decode(errors="replace")
-            raise KeyorixError(f"Server returned {e.code}", status_code=e.code, response_body=body) from e
+            raise _error_for_response(e.code, body) from e
         except urllib.error.URLError as e:
             raise KeyorixError(f"Request failed: {e.reason}") from e
 
@@ -250,7 +288,7 @@ class Client:
             method="GET",
         )
         try:
-            with urllib.request.urlopen(req, timeout=self._timeout) as resp:
+            with urllib.request.urlopen(req, timeout=self._timeout, context=self._ssl_context) as resp:
                 return resp.status == 200
         except urllib.error.URLError as e:
             raise KeyorixError(f"Server unreachable: {e}") from e
@@ -406,12 +444,12 @@ class Client:
             method="POST",
         )
         try:
-            with urllib.request.urlopen(req, timeout=self._timeout) as resp:
+            with urllib.request.urlopen(req, timeout=self._timeout, context=self._ssl_context) as resp:
                 data = json.loads(resp.read())
                 return Project._from_dict(data.get("data", {}))
         except urllib.error.HTTPError as e:
             body = e.read().decode(errors="replace")
-            raise KeyorixError(f"Failed to create project (HTTP {e.code})", status_code=e.code, response_body=body) from e
+            raise _error_for_response(e.code, body) from e
 
     def list_environments(self, project_id: int) -> List["Environment"]:
         """List all environments for a project.

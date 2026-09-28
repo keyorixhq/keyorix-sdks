@@ -4,6 +4,15 @@ All notable changes to the Go SDK are documented here.
 
 ## v0.3.0 (unreleased)
 
+### Added
+
+- `AuthError` (401), `ForbiddenError` (403), and `NotFoundError` (404) —
+  every request path now returns a typed error `errors.As` can distinguish,
+  instead of one generic `*APIError` for everything. All three unwrap to
+  `*APIError`, so existing `errors.As(&apiErr)` callers keep working
+  unchanged. Also fixes an inconsistency in `ListSecretsScoped`, which used
+  to return a bare, untyped `fmt.Errorf` on 401 instead of `*APIError`.
+
 ### Fixed
 
 - **`Secret`/`Project`/`Environment` wire field tags updated to snake_case**

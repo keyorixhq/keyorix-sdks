@@ -29,6 +29,8 @@ export declare class KeyorixError extends Error {
   responseBody?: string;
 }
 export declare class AuthError extends KeyorixError {}
+export declare class ForbiddenError extends KeyorixError {}
+export declare class NotFoundError extends KeyorixError {}
 export declare class SecretNotFoundError extends KeyorixError {}
 export declare class AmbiguousSecretError extends KeyorixError {
   ids: number[];
