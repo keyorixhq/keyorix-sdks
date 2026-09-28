@@ -4,6 +4,17 @@ All notable changes to the Go SDK are documented here.
 
 ## v0.3.0 (unreleased)
 
+### Fixed
+
+- **`Secret`/`Project`/`Environment` wire field tags updated to snake_case**
+  (`id`, `name`, `project_id`, `created_at`, `description`, `type`), matching
+  the server's current response shape since keyorixhq/keyorix#2098 and #2128
+  (both merged 2026-09-26). `encoding/json`'s case-insensitive fallback had
+  been silently masking single-word fields (`ID`↔`id`) but not multi-word
+  ones — `ProjectID`/`CreatedAt` were both zeroing out silently on `main`.
+  Proven red without this fix / green with it via `go/contract_test.go`
+  against a real server built from keyorix `main`.
+
 ### Breaking
 
 - **`GetSecret`/`ListSecrets` (environment-only) removed.** An environment

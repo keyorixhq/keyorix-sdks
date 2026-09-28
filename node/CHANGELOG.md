@@ -4,6 +4,17 @@ All notable changes to the Node.js SDK are documented here.
 
 ## v0.3.0 (unreleased)
 
+### Fixed
+
+- **`Secret`/`Project`/`Environment` wire field reads updated to snake_case**
+  (`id`, `name`, `project_id`, `created_at`, `description`, `type`), matching
+  the server's current response shape since keyorixhq/keyorix#2098 and #2128
+  (both merged 2026-09-26). Unlike Go, Node has no case-insensitive fallback
+  at all — every field of these three types came back `undefined` on
+  `main`, silently, with no exception anywhere. Proven red without this fix
+  / green with it via `node/contract-test.js` against a real server built
+  from keyorix `main`.
+
 ### Breaking
 
 - **`getSecret`/`listSecrets` (environment-only) removed.** An environment

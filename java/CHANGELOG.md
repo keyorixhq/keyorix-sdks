@@ -4,6 +4,18 @@ All notable changes to the Java SDK are documented here.
 
 ## v0.3.0 (unreleased)
 
+### Fixed
+
+- **`Secret`/`Project`/`Environment` wire field lookups updated to
+  snake_case** (`id`, `name`, `project_id`, `created_at`, `description`,
+  `type`), matching the server's current response shape since
+  keyorixhq/keyorix#2098 and #2128 (both merged 2026-09-26).
+  `JsonParser`'s exact-string key lookups had no case tolerance at all —
+  every field of these three types silently came back as its Java default
+  (`0`/`null`) on `main`. Proven red without this fix / green with it via
+  `java/src/test/java/com/keyorix/ContractTest.java` against a real server
+  built from keyorix `main`.
+
 ### Breaking
 
 - **`getSecret`/`listSecrets` (environment-only) removed.** An environment

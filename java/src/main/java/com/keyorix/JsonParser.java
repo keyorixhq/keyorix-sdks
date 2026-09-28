@@ -70,12 +70,12 @@ class JsonParser {
 
     private static Secret parseSecret(String obj) {
         try {
-            long id = parseLong(obj, "ID");
-            String name = extractString(obj, "Name");
-            String type = extractString(obj, "Type");
+            long id = parseLong(obj, "id");
+            String name = extractString(obj, "name");
+            String type = extractString(obj, "type");
             String env = extractString(obj, "environment_name");
-            long projectId = parseLong(obj, "ProjectID");
-            String createdAt = extractString(obj, "CreatedAt");
+            long projectId = parseLong(obj, "project_id");
+            String createdAt = extractString(obj, "created_at");
             if (name == null) return null;
             return new Secret(id, name, type != null ? type : "", env != null ? env : "",
                               projectId, createdAt != null ? createdAt : "");
@@ -86,10 +86,10 @@ class JsonParser {
 
     private static Project parseProject(String obj) {
         try {
-            long id = parseLong(obj, "ID");
-            String name = extractString(obj, "Name");
-            String description = extractString(obj, "Description");
-            String createdAt = extractString(obj, "CreatedAt");
+            long id = parseLong(obj, "id");
+            String name = extractString(obj, "name");
+            String description = extractString(obj, "description");
+            String createdAt = extractString(obj, "created_at");
             if (name == null) return null;
             return new Project(id, name, description != null ? description : "",
                                 createdAt != null ? createdAt : "");
@@ -100,9 +100,9 @@ class JsonParser {
 
     private static Environment parseEnvironment(String obj) {
         try {
-            long id = parseLong(obj, "ID");
-            String name = extractString(obj, "Name");
-            long projectId = parseLong(obj, "ProjectID");
+            long id = parseLong(obj, "id");
+            String name = extractString(obj, "name");
+            long projectId = parseLong(obj, "project_id");
             if (name == null) return null;
             return new Environment(id, projectId, name);
         } catch (Exception e) {

@@ -152,9 +152,9 @@ func TestListSecretsScoped_wrapsServerErrorWithoutLeakingBody(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/api/v1/projects":
-			w.Write([]byte(`{"data":{"projects":[{"ID":1,"Name":"proj"}]}}`))
+			w.Write([]byte(`{"data":{"projects":[{"id":1,"name":"proj"}]}}`))
 		case "/api/v1/projects/1/environments":
-			w.Write([]byte(`{"data":{"environments":[{"ID":1,"Name":"prod","ProjectID":1}]}}`))
+			w.Write([]byte(`{"data":{"environments":[{"id":1,"name":"prod","project_id":1}]}}`))
 		default:
 			w.WriteHeader(http.StatusInternalServerError)
 			w.Write([]byte(raw))

@@ -115,12 +115,12 @@ class Secret:
     @classmethod
     def _from_dict(cls, data: dict) -> "Secret":
         return cls(
-            id=data.get("ID", 0),
-            name=data.get("Name", ""),
-            type=data.get("Type", ""),
-            project_id=data.get("ProjectID", 0),
+            id=data.get("id", 0),
+            name=data.get("name", ""),
+            type=data.get("type", ""),
+            project_id=data.get("project_id", 0),
             environment=data.get("environment_name", ""),
-            created_at=data.get("CreatedAt", ""),
+            created_at=data.get("created_at", ""),
         )
 
 
@@ -136,10 +136,10 @@ class Project:
     @classmethod
     def _from_dict(cls, data: dict) -> "Project":
         return cls(
-            id=data.get("ID", 0),
-            name=data.get("Name", ""),
-            description=data.get("Description", ""),
-            created_at=data.get("CreatedAt", ""),
+            id=data.get("id", 0),
+            name=data.get("name", ""),
+            description=data.get("description", ""),
+            created_at=data.get("created_at", ""),
         )
 
 
@@ -154,9 +154,9 @@ class Environment:
     @classmethod
     def _from_dict(cls, data: dict) -> "Environment":
         return cls(
-            id=data.get("ID", 0),
-            project_id=data.get("ProjectID", 0),
-            name=data.get("Name", ""),
+            id=data.get("id", 0),
+            project_id=data.get("project_id", 0),
+            name=data.get("name", ""),
         )
 
 
