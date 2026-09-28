@@ -124,6 +124,13 @@ if err != nil {
 - Go 1.21+
 - Keyorix server v0.1.0+
 
+## Compatibility
+
+See [`../COMPATIBILITY.md`](../COMPATIBILITY.md) for the current
+known-compatible server versions and per-endpoint coverage — verified by
+[`../.github/workflows/contract.yml`](../.github/workflows/contract.yml)
+against a real keyorix-server, not asserted by hand.
+
 ## License
 
 Apache-2.0 — see the [repository root LICENSE](../LICENSE)

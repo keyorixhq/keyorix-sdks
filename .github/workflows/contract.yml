@@ -1,0 +1,136 @@
+name: Contract
+
+# Runs every SDK's contract test suite (go/contract_test.go,
+# node/contract-test.js, python/test_keyorix_contract.py,
+# java/src/test/java/com/keyorix/ContractTest.java) against a REAL
+# keyorix-server built from source -- not a mock -- so a server-side
+# wire-format change is caught here, not by a customer's silently-empty
+# field. See each contract test file's own header comment for the full
+# rationale and keyorixhq/keyorix's SDKS track report for the compatibility
+# status this currently pins.
+#
+# The server ref is read from .keyorix-server-ref (repo root), currently
+# "main": a deliberate choice to track keyorixhq/keyorix's main branch as a
+# moving target rather than pin to the last released tag, because the
+# concrete motivation for this job (PRs #2088/#2098 changing wire formats,
+# #2113 adding gRPC share expiry) lands on main well before any release cuts
+# -- pinning to a release would let exactly the drift this job exists to
+# catch merge into a release undetected. Move this to a fixed tag instead if
+# main-tracking proves too noisy (e.g. a WIP change on main breaks this job
+# before it's meant to be SDK-visible); either way the ref lives in one
+# reviewable file, not hardcoded in this workflow.
+#
+# One job, one server instance, all four languages run their contract tests
+# against it sequentially -- avoids the cross-job networking complexity of
+# splitting into a matrix, and /system/init's idempotency (a second call
+# reports already_initialized rather than erroring) makes sequential re-use
+# safe: each language bootstraps the same "contract-admin" account (a no-op
+# after the first) and only ever creates its OWN uniquely-named
+# project/secret, so there is no cross-language collision.
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+env:
+  KEYORIX_CONTRACT_SERVER_URL: http://localhost:18790
+  KEYORIX_CONTRACT_BOOTSTRAP_TOKEN: contract-ci-bootstrap-token-not-a-secret
+
+jobs:
+  contract:
+    name: Contract tests (real keyorix-server)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout keyorix-sdks
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: sdks
+
+      - name: Read pinned keyorix-server ref
+        id: pin
+        run: echo "ref=$(cat sdks/.keyorix-server-ref)" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout keyorix (server source)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: keyorixhq/keyorix
+          ref: ${{ steps.pin.outputs.ref }}
+          path: keyorix-server-src
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: keyorix-server-src/go.mod
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '20'
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.12'
+
+      - uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
+        with:
+          java-version: 11
+          distribution: temurin
+          cache: maven
+
+      - name: Build keyorix-server
+        working-directory: keyorix-server-src
+        run: go build -o "$RUNNER_TEMP/keyorix-server" ./server
+
+      - name: Start keyorix-server
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/contract-server/keys"
+          cp sdks/.github/contract-server/keyorix.yaml "$RUNNER_TEMP/contract-server/keyorix.yaml"
+          chmod 600 "$RUNNER_TEMP/contract-server/keyorix.yaml"
+          cd "$RUNNER_TEMP/contract-server"
+          KEYORIX_CONFIG_PATH=./keyorix.yaml \
+            KEYORIX_MASTER_PASSWORD=contract-ci-master-password-not-a-secret \
+            KEYORIX_BOOTSTRAP_TOKEN="$KEYORIX_CONTRACT_BOOTSTRAP_TOKEN" \
+            "$RUNNER_TEMP/keyorix-server" > "$RUNNER_TEMP/keyorix-server.log" 2>&1 &
+          echo $! > "$RUNNER_TEMP/keyorix-server.pid"
+          for _ in $(seq 1 30); do
+            if curl -sf "$KEYORIX_CONTRACT_SERVER_URL/health" > /dev/null; then
+              echo "keyorix-server is healthy"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "::error::keyorix-server did not become healthy within 30s"
+          cat "$RUNNER_TEMP/keyorix-server.log"
+          exit 1
+
+      - name: Go contract test
+        working-directory: sdks/go
+        run: go test -run TestContract -v ./...
+
+      - name: npm ci
+        working-directory: sdks/node
+        run: npm ci --ignore-scripts
+
+      - name: Node contract test
+        working-directory: sdks/node
+        run: npm run test:contract
+
+      - name: Python contract test
+        working-directory: sdks/python
+        run: python -m unittest test_keyorix_contract -v
+
+      - name: Java contract test
+        working-directory: sdks/java
+        run: mvn -B -Dtest=ContractTest test
+
+      - name: Stop keyorix-server
+        if: always()
+        run: kill "$(cat "$RUNNER_TEMP/keyorix-server.pid")" 2>/dev/null || true
+
+      - name: Upload keyorix-server log
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: keyorix-server-log
+          path: ${{ runner.temp }}/keyorix-server.log
+          retention-days: 7

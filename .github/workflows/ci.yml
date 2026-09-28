@@ -1,13 +1,15 @@
 name: CI
 
-# Sole PR/push entry point for go.yml, java.yml, node.yml, python.yml, dco.yml
-# -- those five are now workflow_call-only (no push/pull_request triggers of
-# their own), so this is the only place "should X run for this change"
-# gets decided. Keeping that decision in one job (`changes`) means the gate
-# below can validate against the exact same outputs that gated each job,
-# instead of re-deriving its own copy of the same logic (the drift between
-# two independent copies of "which paths mean what" is what made the
-# previous 11-required-context setup impossible to keep in sync).
+# Sole PR/push entry point for go.yml, java.yml, node.yml, python.yml,
+# contract.yml, dco.yml -- those six are now workflow_call-only (no
+# push/pull_request triggers of their own), so this is the only place
+# "should X run for this change" gets decided. Keeping that decision in one
+# job (`changes`) means the gate below can validate against the exact same
+# outputs that gated each job, instead of re-deriving its own copy of the
+# same logic (the drift between two independent copies of "which paths mean
+# what" is what made the previous 11-required-context setup impossible to
+# keep in sync). contract is the one exception to `changes`-gating -- see
+# its own job comment below.
 on:
   push:
     branches: [main]
@@ -94,6 +96,16 @@ jobs:
     uses: ./.github/workflows/python.yml
     secrets: inherit
 
+  contract:
+    name: Contract
+    # Unconditional (not gated by `changes`): this validates the SDKs against
+    # a real, current keyorix-server end to end, which is exactly the kind of
+    # cross-cutting compatibility check that a per-language path filter would
+    # wrongly skip -- a server-side wire-format change on the pinned ref
+    # (.keyorix-server-ref) can break an SDK this PR never touched.
+    uses: ./.github/workflows/contract.yml
+    secrets: inherit
+
   dco:
     name: DCO
     # Unconditional on pull_request (matches dco.yml's original behavior --
@@ -112,7 +124,7 @@ jobs:
 
   gate:
     name: Gate
-    needs: [changes, go, java, node, python, dco]
+    needs: [changes, go, java, node, python, contract, dco]
     if: always()
     runs-on: ubuntu-latest
     steps:
@@ -128,6 +140,7 @@ jobs:
           NODE_RESULT: ${{ needs.node.result }}
           PYTHON_EXPECTED: ${{ needs.changes.outputs.python }}
           PYTHON_RESULT: ${{ needs.python.result }}
+          CONTRACT_RESULT: ${{ needs.contract.result }}
           DCO_RESULT: ${{ needs.dco.result }}
         run: |
           fail=0
@@ -163,6 +176,13 @@ jobs:
           check "java"   "$JAVA_EXPECTED"   "$JAVA_RESULT"
           check "node"   "$NODE_EXPECTED"   "$NODE_RESULT"
           check "python" "$PYTHON_EXPECTED" "$PYTHON_RESULT"
+
+          # contract runs unconditionally (not gated by `changes`), so it must
+          # always succeed -- there is no "legitimately skipped" state for it.
+          if [ "$CONTRACT_RESULT" != "success" ]; then
+            echo "::error::contract was expected to run unconditionally but result=$CONTRACT_RESULT"
+            fail=1
+          fi
 
           # dco only runs on pull_request (see the job's `if:` above) --
           # there's no PR commit range to check DCO sign-off against on a

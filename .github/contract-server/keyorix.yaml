@@ -1,0 +1,73 @@
+# Throwaway config for the CI "contract" job's keyorix-server instance
+# (.github/workflows/contract.yml). SQLite + no TLS + relaxed password policy
+# -- this process exists only to answer the SDK contract tests for the
+# lifetime of one CI run and is discarded afterward. Never used to serve
+# real data. dek_path/salt_path/database.path are relative -- the server
+# resolves them against its own process cwd (internal/securefiles rejects
+# absolute paths here), so the workflow cds into a scratch directory before
+# starting it.
+locale:
+  language: "en"
+  fallback_language: "en"
+
+server:
+  http:
+    enabled: true
+    port: "18790"
+    protocol_versions: ["1.1"]
+    tls:
+      enabled: false
+  grpc:
+    enabled: false
+
+storage:
+  type: sqlite
+  database:
+    path: "keyorix.db"
+    max_open_conns: 25
+    max_idle_conns: 5
+    conn_max_lifetime_minutes: 30
+  encryption:
+    enabled: true
+    dek_path: "keys/dek.key"
+    salt_path: "keys/kek.salt"
+
+secrets:
+  chunking:
+    enabled: true
+    max_chunk_size_kb: 64
+    max_chunks_per_secret: 10
+  limits:
+    max_secrets_per_user: 1000
+
+security:
+  # This is a throwaway, single-run, localhost-only CI fixture -- disabling
+  # the permission/ownership audit here trades an irrelevant check (file
+  # perms on a container filesystem that's destroyed after the job) for a
+  # simpler job script. Never disable this for anything serving real data.
+  enable_file_permission_check: false
+  auto_fix_file_permissions: true
+  allow_unsafe_file_permissions: false
+  require_transport_tls: false
+
+password_policy:
+  min_length: 8
+  require_uppercase: false
+  require_lowercase: false
+  require_digit: false
+  require_special: false
+  reject_personal_info: false
+  reject_common_passwords: false
+  history_count: 0
+  max_age_days: 0
+
+soft_delete:
+  enabled: true
+  retention_days: 30
+
+purge:
+  enabled: false
+  schedule: "24h"
+
+membership:
+  validation_mode: "open"
