@@ -108,6 +108,13 @@ function request(options, body) {
       });
     });
     req.on('error', reject);
+    // Node's `timeout` request option only emits a 'timeout' event on
+    // inactivity -- it does NOT abort the request by itself. Without this
+    // handler, the configured timeout (default or caller-supplied) is
+    // silently decorative and a hung server would block forever.
+    req.on('timeout', () => {
+      req.destroy(new KeyorixError(`Request timed out after ${options.timeout}ms`));
+    });
     if (body) req.write(body);
     req.end();
   });

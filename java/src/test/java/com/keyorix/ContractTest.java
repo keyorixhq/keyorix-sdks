@@ -72,6 +72,10 @@ class ContractTest {
     }
 
     private static int postJson(String url, String body, String bearerToken) throws IOException {
+        return postJson(url, body, bearerToken, null);
+    }
+
+    private static int postJson(String url, String body, String bearerToken, StringBuilder responseOut) throws IOException {
         HttpURLConnection conn = (HttpURLConnection) new URL(url).openConnection();
         conn.setRequestMethod("POST");
         conn.setDoOutput(true);
@@ -89,9 +93,65 @@ class ContractTest {
             byte[] chunk = new byte[4096];
             int n;
             while ((n = is.read(chunk)) != -1) buf.write(chunk, 0, n);
+            if (responseOut != null) responseOut.append(buf.toString(StandardCharsets.UTF_8));
         }
         conn.disconnect();
         return status;
+    }
+
+    /** Mints a personal access token for the caller identified by adminToken, via raw
+     * HTTP (PAT issuance is not part of this SDK's public surface). */
+    private static String createPAT(String adminToken, String name) throws IOException {
+        StringBuilder resp = new StringBuilder();
+        int status = postJson(serverUrl + "/api/v1/auth/tokens", "{\"name\":\"" + name + "\"}", adminToken, resp);
+        if (status >= 300) {
+            throw new IllegalStateException("POST /api/v1/auth/tokens: unexpected status " + status);
+        }
+        String tok = JsonParser.extractString(resp.toString(), "token");
+        if (tok == null) throw new IllegalStateException("create-PAT response had no token");
+        return tok;
+    }
+
+    /** Creates a fresh machine identity in projectId and issues it a token, via raw HTTP
+     * (neither is part of this SDK's public surface). A brand-new machine identity holds
+     * no roles, so this token authenticates but is not authorized for anything yet --
+     * exactly the shape needed to prove authentication succeeds independently of
+     * authorization. */
+    private static String createMachineToken(String adminToken, long projectId) throws IOException {
+        StringBuilder idResp = new StringBuilder();
+        String idBody = "{\"name\":\"contract-test-machine-" + System.nanoTime() + "\",\"identity_type\":\"service\"}";
+        int idStatus = postJson(serverUrl + "/api/v1/projects/" + projectId + "/machine-identities", idBody, adminToken, idResp);
+        if (idStatus >= 300) {
+            throw new IllegalStateException("POST machine-identities: unexpected status " + idStatus);
+        }
+        long machineId = parseIdField(idResp.toString());
+        if (machineId == 0) throw new IllegalStateException("create-machine-identity response had no id");
+
+        StringBuilder tokResp = new StringBuilder();
+        int tokStatus = postJson(
+            serverUrl + "/api/v1/projects/" + projectId + "/machine-identities/" + machineId + "/tokens",
+            "{\"name\":\"contract-test-machine-token\"}", adminToken, tokResp);
+        if (tokStatus >= 300) {
+            throw new IllegalStateException("POST machine-identities tokens: unexpected status " + tokStatus);
+        }
+        String tok = JsonParser.extractString(tokResp.toString(), "token");
+        if (tok == null) throw new IllegalStateException("issue-machine-token response had no token");
+        return tok;
+    }
+
+    /** Extracts the raw numeric "id" field nested under "machine_identity" in a
+     * create-machine-identity response, e.g. {"data":{"machine_identity":{"id":1,...}}}. */
+    private static long parseIdField(String json) {
+        int idx = json.indexOf("\"machine_identity\"");
+        if (idx == -1) return 0;
+        int idIdx = json.indexOf("\"id\"", idx);
+        if (idIdx == -1) return 0;
+        int colon = json.indexOf(':', idIdx);
+        int start = colon + 1;
+        int end = start;
+        while (end < json.length() && Character.isDigit(json.charAt(end))) end++;
+        if (start == end) return 0;
+        return Long.parseLong(json.substring(start, end));
     }
 
     @Test
@@ -136,5 +196,57 @@ class ContractTest {
 
         String value = client.getSecretScoped(secretName, defaultProject.getId(), devEnv.getId());
         assertEquals(secretValue, value);
+    }
+
+    @Test
+    void patAuthWorksTransparently() throws Exception {
+        String pat = createPAT(token, "contract-test-pat");
+        KeyorixClient patClient = Keyorix.newClient(serverUrl, pat);
+        try {
+            patClient.listProjects();
+        } catch (KeyorixException e) {
+            fail("Client with a PAT: " + e.getMessage()
+                + " (expected success -- a PAT presents identically to a session token)");
+        }
+    }
+
+    @Test
+    void machineTokenAuthWorksTransparently() throws Exception {
+        Project defaultProject = client.listProjects().stream()
+                .filter(p -> p.getName().equals("default")).findFirst().orElseThrow();
+        String machineToken = createMachineToken(token, defaultProject.getId());
+        KeyorixClient machineClient = Keyorix.newClient(serverUrl, machineToken);
+        // A brand-new machine identity holds no roles, so this must authenticate (not
+        // AuthException) even though it can't yet be authorized for anything
+        // (ForbiddenException) -- proving the token is recognized as valid, distinct
+        // from being permitted.
+        assertThrows(ForbiddenException.class, machineClient::listProjects);
+    }
+
+    @Test
+    void timeoutIsEnforcedAgainstASlowServer() throws Exception {
+        com.sun.net.httpserver.HttpServer slow =
+            com.sun.net.httpserver.HttpServer.create(new java.net.InetSocketAddress("localhost", 0), 0);
+        slow.createContext("/", exchange -> {
+            try {
+                Thread.sleep(200);
+            } catch (InterruptedException ignored) {
+                Thread.currentThread().interrupt();
+            }
+            byte[] resp = "{\"data\":{\"projects\":[]}}".getBytes(StandardCharsets.UTF_8);
+            exchange.sendResponseHeaders(200, resp.length);
+            try (OutputStream os = exchange.getResponseBody()) {
+                os.write(resp);
+            }
+        });
+        slow.start();
+        try {
+            KeyorixClient slowClient = new KeyorixClient(
+                "http://localhost:" + slow.getAddress().getPort(), "tok", java.time.Duration.ofMillis(10));
+            assertThrows(KeyorixException.class, slowClient::listProjects,
+                "expected a timeout error from a 10ms client against a 200ms-slow server");
+        } finally {
+            slow.stop(0);
+        }
     }
 }

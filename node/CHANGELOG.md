@@ -16,6 +16,17 @@ All notable changes to the Node.js SDK are documented here.
 
 ### Fixed
 
+- **`timeout` (default 30s, or the `opts.timeout` override) was silently
+  decorative** — Node's `http.request`/`https.request` `timeout` option
+  only emits a `'timeout'` event on socket inactivity; it does not abort
+  the request by itself. Without a handler, every request against a slow
+  or hung server blocked forever regardless of the configured timeout.
+  Found while adding a contract-test case that actually exercises timeout
+  behavior against a real slow server (was red, now green — see
+  `contract-test.js`), not just asserted the configured value. Fixed by
+  destroying the request and rejecting with a `KeyorixError` on
+  `'timeout'`.
+
 - **`Secret`/`Project`/`Environment` wire field reads updated to snake_case**
   (`id`, `name`, `project_id`, `created_at`, `description`, `type`), matching
   the server's current response shape since keyorixhq/keyorix#2098 and #2128
