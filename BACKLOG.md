@@ -6,7 +6,38 @@ each section. For architectural rationale see the `keyorix` repo's ADRs
 
 ## In progress / next
 
+- **NEEDS ANDREI: cut the first `v0.3.0` release.** No `vX.Y.Z` tag or
+  GitHub release has ever been cut for this repo (zero tags, zero
+  releases) despite ADR-072 designating `v0.3.0` as this repo's first
+  release on 2026-08-04 — see COMPATIBILITY.md's "Release status" section
+  for the full detail. Everything else is release-ready as of Session K
+  (2026-09-28): manifests agree on `0.3.0`, CHANGELOGs are current,
+  compatibility matrix verified live. Publishing to npm/PyPI additionally
+  needs the defensive package-name registration ADR-072 flagged
+  (`@keyorixhq` npm scope, `keyorix` on PyPI) — not done by any session to
+  date. Two remaining actions, both requiring Andrei: cut+push the tags
+  (`v0.3.0`, `go/v0.3.0`), and complete the registration before publishing.
+
 ## Done
+
+- **All four SDKs: Session K fixes (snake_case wire break, typed errors,
+  private-CA TLS, PAT/machine-token auth verified live, 2 real timeout
+  bugs).** 2026-09-28. keyorix-sdks#39-#42. keyorix PRs #2098/#2128
+  (merged 2026-09-26) migrated `Secret`/`Project`/`Environment` wire JSON
+  to snake_case, breaking all four SDKs on `main`; fixed and
+  red/green-proofed per language (#39). Added `AuthError`/
+  `ForbiddenError`/`NotFoundError` (401/403/404) across all four, and
+  private-CA support for Node/Python (Go already had it) — verified
+  end-to-end against a real throwaway-cert TLS server, not just plumbed
+  through (#40). Extended every contract test to actually construct the
+  SDK client with a real PAT and a real machine identity token against a
+  live server (not just read from server source) — found and fixed two
+  real bugs doing it: Node's `timeout` option was silently decorative (no
+  handler ever aborted the request), and Python's real timeout leaked a
+  bare `TimeoutError` past every `except URLError` handler (#41). Led
+  every README with a machine identity token instead of password login,
+  matching the auth-parity finding above (#42). Full detail: `keyorix`
+  repo's `~/proj/prompts/reports/SESSION-K.md`.
 
 - **All four SDKs: contract tests against a real keyorix-server + CI wiring.**
   Added 2026-09-25 (keyorix repo's SDKS track). Each language now has a
