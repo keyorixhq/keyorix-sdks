@@ -12,8 +12,18 @@ Zero external dependencies. Uses Node.js built-in http/https modules.
 
     const keyorix = require('@keyorixhq/sdk');
 
-    const token = await keyorix.login('https://your-server:8443', 'admin', 'password');
-    const client = new keyorix.Client('https://your-server:8443', token);
+    // Recommended for apps: a machine identity token, not a user password.
+    // Issue one via `keyorix machine token issue <name|id>` (or the web
+    // UI's Project -> Machine Identities -> Issue Token), then load it
+    // from your app's secret store / env var -- never hardcode it.
+    const client = new keyorix.Client('https://your-server:8443', process.env.KEYORIX_TOKEN);
+
+    // A personal access token (PAT) works exactly the same way -- pass it
+    // as the token above. Password login (below) is for humans at a
+    // terminal, not for baking into an application.
+    //
+    //   const token = await keyorix.login('https://your-server:8443', 'admin', 'your-password');
+    //   const client = new keyorix.Client('https://your-server:8443', token);
 
     // Scoped to a project + environment -- an environment name is only
     // unique within one project, not globally.
@@ -32,8 +42,13 @@ Zero external dependencies. Uses Node.js built-in http/https modules.
 
 ## API
 
-- keyorix.login(serverUrl, username, password) -> Promise<string>
-- new keyorix.Client(serverUrl, token, opts?)
+- new keyorix.Client(serverUrl, token, opts?) — `token` is a machine identity
+  token, a PAT, or a session token; the server accepts all three identically.
+  For an app running unattended, prefer a machine identity token over a
+  user's password.
+- keyorix.login(serverUrl, username, password) -> Promise<string> —
+  authenticates with a human's username/password. For interactive use, not
+  for an application's long-running credential.
 - client.getSecretScoped(name, project, environment) -> Promise<string>
 - client.listSecretsScoped(project, environment) -> Promise<Secret[]>
 - client.health() -> Promise<boolean>
