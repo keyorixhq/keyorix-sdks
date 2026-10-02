@@ -6,6 +6,24 @@ All notable changes to the Node.js SDK are documented here.
 
 ### Added
 
+- `Client.getSecretByRef(ref)` (`GET /api/v1/secrets/value?ref=project/environment/name`)
+  and `Client.getSecretIn(project, environment, name)` (a thin wrapper that
+  builds the ref). Both resolve and authorize in a single round trip and
+  need no project/environment-list permission, unlike `getSecretScoped` —
+  the shape a machine token scoped to exactly one project needs. Errors map
+  through the existing `errorForResponse` (`AuthError`/`ForbiddenError`/
+  `NotFoundError`/generic `KeyorixError`), reusing the typed errors added
+  below rather than a second error set.
+
+### Fixed
+
+- **`listSecretsScoped` silently truncated at the server's default page size
+  (20).** It never sent `page`/`page_size` at all, so a project+environment
+  with more than 20 secrets lost the rest with no error. Now follows every
+  page the server reports (`data.total_pages`) at `page_size=100`.
+
+### Added
+
 - `ForbiddenError` (403) and `NotFoundError` (404) exports, alongside the
   existing `AuthError` (401) — every request path now throws a typed error
   `instanceof` can distinguish, instead of one generic `KeyorixError` for

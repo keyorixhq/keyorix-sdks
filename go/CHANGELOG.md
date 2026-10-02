@@ -2,7 +2,7 @@
 
 All notable changes to the Go SDK are documented here.
 
-## v0.3.0 (unreleased)
+## v0.3.0 — 2026-10-02
 
 ### Added
 

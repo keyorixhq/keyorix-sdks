@@ -4,17 +4,18 @@
  * Keyorix Node.js SDK
  * Zero external dependencies — uses Node.js built-in https/http modules.
  *
- * Quick start:
+ * Quick start, for a machine identity token (the recommended credential for
+ * an unattended application -- see the README):
  *
  *   const keyorix = require('@keyorixhq/sdk');
  *
- *   const token = await keyorix.login('https://your-server:8443', 'admin', 'password');
- *   const client = new keyorix.Client('https://your-server:8443', token);
+ *   const client = new keyorix.Client('https://your-server:8443', process.env.KEYORIX_TOKEN);
+ *   const dbPassword = await client.getSecretIn('my-project', 'production', 'db-password');
  *
- *   // Scoped to a project + environment -- an environment name is only
- *   // unique within one project, not globally.
- *   const dbPassword = await client.getSecretScoped('db-password', 'my-project', 'production');
- *   const secrets = await client.listSecretsScoped('my-project', 'production');
+ * getSecretIn/getSecretByRef resolve and authorize in one round trip and
+ * need no project/environment-list permission. getSecretScoped/
+ * listSecretsScoped are the alternative when you already have (or want to
+ * cache) project/environment IDs rather than names.
  */
 
 const http = require('node:http');
@@ -302,7 +303,10 @@ class Client {
   }
 
   /**
-   * List every secret within one project's environment.
+   * List every secret within one project's environment. Follows every page
+   * the server reports (`data.total_pages`) at page_size=100, so a scope
+   * with more secrets than fit on one page (the server defaults to 20) is
+   * never silently truncated.
    * @param {string|number} project - Project name (resolved to an ID and
    *   cached on this Client) or numeric project ID (no resolution round trip).
    * @param {string|number} environment - Environment name (resolved within
@@ -312,16 +316,64 @@ class Client {
   async listSecretsScoped(project, environment) {
     const projectId = await this._resolveProject(project);
     const envId = await this._resolveEnvironment(projectId, environment);
-    const path = `/api/v1/secrets?project_id=${projectId}&environment_id=${envId}`;
-    const data = await this._request(path);
-    return (data?.data?.secrets || []).map((s) => ({
-      id: s.id,
-      name: s.name,
-      type: s.type,
-      projectId: s.project_id,
-      environment: s.environment_name,
-      createdAt: s.created_at,
-    }));
+
+    const all = [];
+    for (let page = 1; ; page++) {
+      const path = `/api/v1/secrets?project_id=${projectId}&environment_id=${envId}&page=${page}&page_size=100`;
+      const data = await this._request(path);
+      for (const s of data?.data?.secrets || []) {
+        all.push({
+          id: s.id,
+          name: s.name,
+          type: s.type,
+          projectId: s.project_id,
+          environment: s.environment_name,
+          createdAt: s.created_at,
+        });
+      }
+      if (page >= (data?.data?.total_pages || 0)) break;
+    }
+    return all;
+  }
+
+  /**
+   * Get the value of secret `name` within `project`/`environment`, all by
+   * name, via a single server-authorized round trip -- a thin wrapper
+   * around getSecretByRef. Unlike getSecretScoped, this needs no
+   * project/environment-list permission, since the server resolves and
+   * authorizes the whole reference itself. project/environment/name are
+   * joined with "/" -- if any contains a literal "/", use getSecretByRef
+   * directly with your own escaping.
+   * @param {string} project
+   * @param {string} environment
+   * @param {string} name
+   * @returns {Promise<string>} Plaintext secret value
+   */
+  async getSecretIn(project, environment, name) {
+    return this.getSecretByRef(`${project}/${environment}/${name}`);
+  }
+
+  /**
+   * Get a secret's value by its "project/environment/name" reference, via
+   * GET /api/v1/secrets/value?ref=<ref>. The server resolves and authorizes
+   * ref against the resolved secret's own scope in one round trip -- no
+   * project/environment-list permission needed, unlike getSecretScoped. The
+   * secret name may itself contain "/"; only the first two "/"-separated
+   * segments of ref are taken as project and environment.
+   *
+   * Throws NotFoundError if ref resolves to nothing and the caller holds
+   * the global permission needed to confirm that; otherwise (including when
+   * ref resolves to nothing and the caller does NOT hold that permission --
+   * the server denies without confirming the resource exists, to avoid
+   * existence enumeration) a ForbiddenError. A malformed ref (not
+   * "project/environment/name") or an AuthError follow the same mapping as
+   * every other call -- see errorForResponse.
+   * @param {string} ref
+   * @returns {Promise<string>} Plaintext secret value
+   */
+  async getSecretByRef(ref) {
+    const data = await this._request(`/api/v1/secrets/value?ref=${encodeURIComponent(ref)}`);
+    return data?.data?.value || '';
   }
 
   /**

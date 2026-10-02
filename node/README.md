@@ -25,10 +25,14 @@ Zero external dependencies. Uses Node.js built-in http/https modules.
     //   const token = await keyorix.login('https://your-server:8443', 'admin', 'your-password');
     //   const client = new keyorix.Client('https://your-server:8443', token);
 
-    // Scoped to a project + environment -- an environment name is only
-    // unique within one project, not globally.
-    const dbPassword = await client.getSecretScoped('db-password', 'my-project', 'production');
+    // Get a secret value, identified entirely by name -- one round trip,
+    // resolved and authorized server-side. No project/environment-list
+    // permission required, so this is the shape that works for a machine
+    // token scoped to exactly one project.
+    const dbPassword = await client.getSecretIn('my-project', 'production', 'db-password');
 
+    // Already have (or want to cache) project/environment IDs instead of
+    // names? Use the *Scoped methods.
     const secrets = await client.listSecretsScoped('my-project', 'production');
     secrets.forEach(s => console.log(s.name, s.type));
 
@@ -38,7 +42,7 @@ Zero external dependencies. Uses Node.js built-in http/https modules.
       process.env.KEYORIX_SERVER,
       process.env.KEYORIX_TOKEN
     );
-    const dbPassword = await client.getSecretScoped('db-password', 'my-project', 'production');
+    const dbPassword = await client.getSecretIn('my-project', 'production', 'db-password');
 
 ## API
 
@@ -49,8 +53,20 @@ Zero external dependencies. Uses Node.js built-in http/https modules.
 - keyorix.login(serverUrl, username, password) -> Promise<string> —
   authenticates with a human's username/password. For interactive use, not
   for an application's long-running credential.
-- client.getSecretScoped(name, project, environment) -> Promise<string>
-- client.listSecretsScoped(project, environment) -> Promise<Secret[]>
+- client.getSecretIn(project, environment, name) -> Promise<string> — a
+  single server-authorized round trip
+  (`GET /api/v1/secrets/value?ref=project/environment/name`). Needs no
+  project/environment-list permission, unlike `getSecretScoped`.
+- client.getSecretByRef(ref) -> Promise<string> — same as `getSecretIn`, but
+  takes one `"project/environment/name"` string (the name may itself contain
+  `/`) instead of three arguments. `getSecretIn` is a thin wrapper around this.
+- client.getSecretScoped(name, project, environment) -> Promise<string> —
+  prefer `getSecretIn` unless you already have (or want to cache)
+  project/environment IDs: this costs up to two extra round trips to resolve
+  a name-based project/environment the first time, and needs
+  project/environment-list permission to do so.
+- client.listSecretsScoped(project, environment) -> Promise<Secret[]> —
+  follows every page the server reports.
 - client.health() -> Promise<boolean>
 
 `project`/`environment` each accept either a name (`string`, resolved to an ID
