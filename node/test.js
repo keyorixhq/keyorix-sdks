@@ -218,6 +218,104 @@ async function runTests() {
     }
   }
 
+  // getSecretByRef / getSecretIn: single-round-trip ref fetch. The server
+  // only implements /api/v1/secrets/value, not /api/v1/secrets or
+  // /api/v1/projects -- proving this path never needs the list endpoints
+  // getSecretScoped does.
+  {
+    const refSrv = http.createServer((req, res) => {
+      const url = new URL(req.url, 'http://localhost');
+      if (url.pathname !== '/api/v1/secrets/value') {
+        res.writeHead(500);
+        res.end();
+        return;
+      }
+      const ref = url.searchParams.get('ref');
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ data: { value: `value-for:${ref}` } }));
+    });
+    await new Promise((resolve) => refSrv.listen(0, resolve));
+    try {
+      const port = refSrv.address().port;
+      const c = new Client(`http://localhost:${port}`, 'tok');
+
+      const val = await c.getSecretByRef('my project/prod env/path/to/secret');
+      assert(
+        val === 'value-for:my project/prod env/path/to/secret',
+        `getSecretByRef round-trips an escaped ref (spaces + slashes in name), got ${val}`
+      );
+
+      const val2 = await c.getSecretIn('proj', 'env', 'name');
+      assert(val2 === 'value-for:proj/env/name', `getSecretIn builds "project/environment/name", got ${val2}`);
+    } finally {
+      refSrv.close();
+    }
+  }
+
+  // getSecretByRef error mapping: reuses errorForResponse (AuthError/
+  // ForbiddenError/NotFoundError from #40), not a second error set.
+  for (const [status, ErrorClass, label] of [
+    [401, AuthError, 'AuthError'],
+    [403, ForbiddenError, 'ForbiddenError'],
+    [404, NotFoundError, 'NotFoundError'],
+  ]) {
+    const statusServer = http.createServer((req, res) => {
+      res.writeHead(status);
+      res.end();
+    });
+    await new Promise((resolve) => statusServer.listen(0, resolve));
+    try {
+      const port = statusServer.address().port;
+      const badClient = new Client(`http://localhost:${port}`, 'tok');
+      try {
+        await badClient.getSecretByRef('p/e/n');
+        assert(false, `getSecretByRef should have thrown on ${status}`);
+      } catch (e) {
+        assert(e instanceof ErrorClass, `getSecretByRef: HTTP ${status} maps to ${label}`);
+      }
+    } finally {
+      statusServer.close();
+    }
+  }
+
+  // Pagination regression proof: before this fix, listSecretsScoped sent no
+  // page/page_size at all, so it only ever got the server's default first
+  // page (page_size 20) -- a scope with more secrets than that was silently
+  // truncated with no error. This fixture serves 1 secret per page across 2
+  // pages; listSecretsScoped must follow every page the server reports.
+  {
+    const seenPages = [];
+    const pagedSrv = http.createServer((req, res) => {
+      const url = new URL(req.url, 'http://localhost');
+      if (url.pathname === '/api/v1/secrets') {
+        const page = url.searchParams.get('page');
+        seenPages.push(page);
+        const body =
+          page === '2'
+            ? { secrets: [{ id: 2, name: 'b' }], total_pages: 2 }
+            : { secrets: [{ id: 1, name: 'a' }], total_pages: 2 };
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ data: body }));
+        return;
+      }
+      res.writeHead(404);
+      res.end();
+    });
+    await new Promise((resolve) => pagedSrv.listen(0, resolve));
+    try {
+      const port = pagedSrv.address().port;
+      const c = new Client(`http://localhost:${port}`, 'tok');
+      const secrets = await c.listSecretsScoped(1, 1);
+      assert(secrets.length === 2, `listSecretsScoped follows every page, got ${secrets.length} secrets`);
+      assert(
+        seenPages.length === 2 && seenPages[0] === '1' && seenPages[1] === '2',
+        `listSecretsScoped requested pages [1, 2], got ${JSON.stringify(seenPages)}`
+      );
+    } finally {
+      pagedSrv.close();
+    }
+  }
+
   // TLS with a private CA: proves the `ca` client option actually gets
   // verified against, not just plumbed through and ignored. Uses a
   // throwaway self-signed cert (openssl) as its own private CA. Skips

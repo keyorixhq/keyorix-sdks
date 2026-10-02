@@ -52,6 +52,8 @@ export declare class Client {
   getSecret(name: string, environment?: string): Promise<string>;
   listSecretsScoped(project: string | number, environment: string | number): Promise<Secret[]>;
   getSecretScoped(name: string, project: string | number, environment: string | number): Promise<string>;
+  getSecretIn(project: string, environment: string, name: string): Promise<string>;
+  getSecretByRef(ref: string): Promise<string>;
   listProjects(): Promise<Project[]>;
   createProject(name: string, description?: string): Promise<Project>;
   listEnvironments(projectId: number): Promise<Environment[]>;
