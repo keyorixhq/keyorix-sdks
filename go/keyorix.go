@@ -1,9 +1,15 @@
 // Package keyorix provides a Go client for the Keyorix secrets manager API.
 //
-// Quick start:
+// Quick start, for a machine identity token (the recommended credential for
+// an unattended application — see the README):
 //
-//	client, err := keyorix.New("https://your-server:8443", "your-session-token")
-//	secret, err := client.GetSecret(ctx, "db-password", "production")
+//	client, err := keyorix.New("https://your-server:8443", "your-machine-token")
+//	secret, err := client.GetSecretIn(ctx, "my-project", "production", "db-password")
+//
+// GetSecretIn/GetSecretByRef resolve and authorize in one round trip and
+// need no project/environment-list permission. GetSecretScoped/
+// ListSecretsScoped are the alternative when you already have (or want to
+// cache) project/environment IDs rather than names.
 package keyorix
 
 import (
@@ -366,7 +372,10 @@ func (c *Client) GetSecretScoped(ctx context.Context, name string, project Proje
 
 // ListSecretsScoped returns every secret within project+environment visible
 // to the authenticated user. project and environment may each be given by
-// name (resolved to an ID and cached on this Client) or by ID directly.
+// name (resolved to an ID and cached on this Client) or by ID directly. It
+// follows every page the server reports itself, so a scope with more
+// secrets than fit on one page (the server defaults to 20) is never
+// silently truncated.
 func (c *Client) ListSecretsScoped(ctx context.Context, project ProjectRef, environment EnvironmentRef) ([]Secret, error) {
 	projectID, err := c.resolveProject(ctx, project)
 	if err != nil {
@@ -377,34 +386,105 @@ func (c *Client) ListSecretsScoped(ctx context.Context, project ProjectRef, envi
 		return nil, err
 	}
 
-	endpoint := fmt.Sprintf("%s/api/v1/secrets?project_id=%d&environment_id=%d", c.baseURL, projectID, envID)
+	var all []Secret
+	for page := 1; ; page++ {
+		endpoint := fmt.Sprintf("%s/api/v1/secrets?project_id=%d&environment_id=%d&page=%d&page_size=100",
+			c.baseURL, projectID, envID, page)
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+		if err != nil {
+			return nil, fmt.Errorf("keyorix: failed to create request: %w", err)
+		}
+		req.Header.Set("Authorization", authBearer+c.token)
+
+		resp, err := c.httpClient.Do(req)
+		if err != nil {
+			return nil, fmt.Errorf("keyorix: request failed: %w", err)
+		}
+
+		if resp.StatusCode != http.StatusOK {
+			body, _ := io.ReadAll(resp.Body)
+			resp.Body.Close()
+			return nil, errorForResponse(resp.StatusCode, string(body))
+		}
+
+		var result struct {
+			Data struct {
+				Secrets    []Secret `json:"secrets"`
+				TotalPages int      `json:"total_pages"`
+			} `json:"data"`
+		}
+		decodeErr := json.NewDecoder(resp.Body).Decode(&result)
+		resp.Body.Close()
+		if decodeErr != nil {
+			return nil, fmt.Errorf("keyorix: failed to parse response: %w", decodeErr)
+		}
+
+		all = append(all, result.Data.Secrets...)
+		if page >= result.Data.TotalPages {
+			break
+		}
+	}
+
+	return all, nil
+}
+
+// GetSecretIn retrieves the value of secret name within project/environment,
+// identified entirely by name. It is a thin wrapper over GetSecretByRef that
+// builds the "project/environment/name" reference — a single round trip,
+// resolved and authorized server-side, unlike GetSecretScoped (which needs
+// up to two extra round trips to resolve a name-based ProjectRef/
+// EnvironmentRef, and a project/environment-list permission GetSecretByRef
+// does not require). Use GetSecretScoped instead when you already have
+// project/environment IDs (ProjectByID/EnvironmentByID resolve with no
+// network call at all).
+func (c *Client) GetSecretIn(ctx context.Context, project, environment, name string) (string, error) {
+	return c.GetSecretByRef(ctx, project+"/"+environment+"/"+name)
+}
+
+// GetSecretByRef retrieves a secret's value by its "project/environment/name"
+// reference, via GET /api/v1/secrets/value?ref=<ref>. The server resolves and
+// authorizes ref against the resolved secret's own scope in one round trip —
+// it needs no project/environment-list permission, unlike GetSecretScoped.
+// The secret name may itself contain "/"; only the first two "/"-separated
+// segments of ref are taken as project and environment.
+//
+// Returns a *NotFoundError if ref resolves to nothing and the caller holds
+// the global permission needed to confirm that; otherwise (including when
+// ref resolves to nothing and the caller does NOT hold that permission —
+// the server denies without confirming the resource exists, to avoid
+// existence enumeration) a *ForbiddenError. A malformed ref (not
+// "project/environment/name") or an *AuthError follow the same mapping as
+// every other call — see errorForResponse.
+func (c *Client) GetSecretByRef(ctx context.Context, ref string) (string, error) {
+	endpoint := c.baseURL + "/api/v1/secrets/value?ref=" + url.QueryEscape(ref)
+
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
-		return nil, fmt.Errorf("keyorix: failed to create request: %w", err)
+		return "", fmt.Errorf("keyorix: failed to create request: %w", err)
 	}
 	req.Header.Set("Authorization", authBearer+c.token)
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("keyorix: request failed: %w", err)
+		return "", fmt.Errorf("keyorix: request failed: %w", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
-		return nil, errorForResponse(resp.StatusCode, string(body))
+		return "", errorForResponse(resp.StatusCode, string(body))
 	}
 
 	var result struct {
 		Data struct {
-			Secrets []Secret `json:"secrets"`
+			Value string `json:"value"`
 		} `json:"data"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return nil, fmt.Errorf("keyorix: failed to parse response: %w", err)
+		return "", fmt.Errorf("keyorix: failed to parse response: %w", err)
 	}
 
-	return result.Data.Secrets, nil
+	return result.Data.Value, nil
 }
 
 // resolveProject resolves ref to a project ID, using (and populating) the
