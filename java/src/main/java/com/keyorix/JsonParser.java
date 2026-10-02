@@ -32,6 +32,11 @@ class JsonParser {
         return result;
     }
 
+    /** Extract total_pages from a paginated list response: {"data":{...,"total_pages":N}} */
+    static int parseTotalPages(String json) {
+        return (int) parseLong(json, "total_pages");
+    }
+
     /** Parse project list from: {"data":{"projects":[...]}} */
     static List<Project> parseProjectList(String json) {
         List<String> objects = extractArrayObjects(json, "projects");
