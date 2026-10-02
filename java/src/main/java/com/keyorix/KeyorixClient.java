@@ -26,16 +26,23 @@ import javax.net.ssl.TrustManagerFactory;
  *
  * <p>Zero external dependencies. Uses Java standard library only (Java 11+).
  *
- * <p>Quick start:
+ * <p>Quick start, for a machine identity token (the recommended credential
+ * for an unattended application — see the README):
  * <pre>
- *   String token = Keyorix.login("https://your-server:8443", "admin", "password");
- *   KeyorixClient client = new KeyorixClient("https://your-server:8443", token);
- *   String dbPassword = client.getSecretScoped("db-password", "my-project", "production");
+ *   KeyorixClient client = new KeyorixClient("https://your-server:8443", System.getenv("KEYORIX_TOKEN"));
+ *   String dbPassword = client.getSecretIn("my-project", "production", "db-password");
  * </pre>
+ *
+ * <p>{@code getSecretIn}/{@code getSecretByRef} resolve and authorize in one
+ * round trip and need no project/environment-list permission.
+ * {@code getSecretScoped}/{@code listSecretsScoped} are the alternative when
+ * you already have (or want to cache) project/environment IDs rather than
+ * names.
  */
 public class KeyorixClient {
 
     private static final String SECRETS_PATH = "/api/v1/secrets";
+    private static final String SECRETS_VALUE_PATH = "/api/v1/secrets/value";
     private static final String PROJECTS_PATH = "/api/v1/projects";
     private static final String HEALTH_PATH = "/health";
 
@@ -238,14 +245,68 @@ public class KeyorixClient {
 
     /**
      * Lists every secret within projectId's environmentId — no
-     * project/environment name resolution round trip is made.
+     * project/environment name resolution round trip is made. Follows
+     * every page the server reports (total_pages) at page_size=100, so a
+     * scope with more secrets than fit on one page (the server defaults to
+     * 20) is never silently truncated.
      *
      * @throws KeyorixException if an API error occurs
      */
     public List<Secret> listSecretsScoped(long projectId, long environmentId) throws KeyorixException {
-        String path = SECRETS_PATH + "?project_id=" + projectId + "&environment_id=" + environmentId;
-        String response = get(path);
-        return JsonParser.parseSecretList(response);
+        List<Secret> all = new ArrayList<>();
+        int page = 1;
+        while (true) {
+            String path = SECRETS_PATH + "?project_id=" + projectId + "&environment_id=" + environmentId
+                + "&page=" + page + "&page_size=100";
+            String response = get(path);
+            all.addAll(JsonParser.parseSecretList(response));
+            int totalPages = JsonParser.parseTotalPages(response);
+            if (page >= totalPages) break;
+            page++;
+        }
+        return all;
+    }
+
+    /**
+     * Returns the value of secret {@code name} within {@code project}/
+     * {@code environment}, all by name, via a single server-authorized
+     * round trip — a thin wrapper around {@link #getSecretByRef(String)}.
+     * Unlike {@code getSecretScoped}, this needs no project/environment-list
+     * permission, since the server resolves and authorizes the whole
+     * reference itself. project/environment/name are joined with "/" — if
+     * any contains a literal "/", call {@link #getSecretByRef(String)}
+     * directly with your own escaping.
+     *
+     * @throws KeyorixException if an API error occurs
+     */
+    public String getSecretIn(String project, String environment, String name) throws KeyorixException {
+        return getSecretByRef(project + "/" + environment + "/" + name);
+    }
+
+    /**
+     * Returns a secret's value by its "project/environment/name" reference,
+     * via {@code GET /api/v1/secrets/value?ref=<ref>}. The server resolves
+     * and authorizes ref against the resolved secret's own scope in one
+     * round trip — no project/environment-list permission needed, unlike
+     * {@code getSecretScoped}. The secret name may itself contain "/"; only
+     * the first two "/"-separated segments of ref are taken as project and
+     * environment.
+     *
+     * <p>Throws {@link NotFoundException} if ref resolves to nothing and the
+     * caller holds the global permission needed to confirm that; otherwise
+     * (including when ref resolves to nothing and the caller does NOT hold
+     * that permission — the server denies without confirming the resource
+     * exists, to avoid existence enumeration) a {@link ForbiddenException}.
+     * A malformed ref (not "project/environment/name") or an
+     * {@link AuthException} follow the same mapping as every other call —
+     * see {@link #mapError}.
+     *
+     * @throws KeyorixException if an API error occurs
+     */
+    public String getSecretByRef(String ref) throws KeyorixException {
+        String encoded = java.net.URLEncoder.encode(ref, StandardCharsets.UTF_8);
+        String response = get(SECRETS_VALUE_PATH + "?ref=" + encoded);
+        return JsonParser.parseSecretValue(response);
     }
 
     /**

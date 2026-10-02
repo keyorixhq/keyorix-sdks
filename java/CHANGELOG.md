@@ -6,6 +6,26 @@ All notable changes to the Java SDK are documented here.
 
 ### Added
 
+- `KeyorixClient.getSecretByRef(ref)` (`GET /api/v1/secrets/value?ref=project/environment/name`)
+  and `KeyorixClient.getSecretIn(project, environment, name)` (a thin
+  wrapper that builds the ref). Both resolve and authorize in a single
+  round trip and need no project/environment-list permission, unlike
+  `getSecretScoped` — the shape a machine token scoped to exactly one
+  project needs. Errors map through the existing `mapError`
+  (`AuthException`/`ForbiddenException`/`NotFoundException`/generic
+  `KeyorixException`), reusing the typed exceptions added below rather
+  than a second exception hierarchy.
+
+### Fixed
+
+- **`listSecretsScoped` silently truncated at the server's default page
+  size (20).** It never sent `page`/`page_size` at all, so a
+  project+environment with more than 20 secrets lost the rest with no
+  error. Now follows every page the server reports (`total_pages`) at
+  `page_size=100`.
+
+### Added
+
 - `ForbiddenException` (403) and `NotFoundException` (404), alongside the
   existing `AuthException` (401) — every request path now throws a typed
   exception callers can catch specifically, instead of one generic
