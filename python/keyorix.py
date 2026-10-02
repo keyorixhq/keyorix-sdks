@@ -1,23 +1,18 @@
 """
 keyorix — Python client for the Keyorix secrets manager.
 
-Quick start:
+Quick start, for a machine identity token (the recommended credential for
+an unattended application -- see the README):
 
     import keyorix
 
-    # Option 1: use a token directly
-    client = keyorix.Client("https://your-server:8443", "your-token")
+    client = keyorix.Client("https://your-server:8443", "your-machine-token")
+    db_password = client.get_secret_in("my-project", "production", "db-password")
 
-    # Option 2: log in with username/password
-    token = keyorix.login("https://your-server:8443", "admin", "password")
-    client = keyorix.Client("https://your-server:8443", token)
-
-    # Get a secret -- scoped to a project + environment, since an environment
-    # name is only unique within one project, not globally.
-    db_password = client.get_secret_scoped("db-password", "my-project", "production")
-
-    # List secrets
-    secrets = client.list_secrets_scoped("my-project", "production")
+get_secret_in/get_secret_by_ref resolve and authorize in one round trip and
+need no project/environment-list permission. get_secret_scoped/
+list_secrets_scoped are the alternative when you already have (or want to
+cache) project/environment IDs rather than names.
 """
 
 import ipaddress
@@ -332,6 +327,10 @@ class Client:
     def list_secrets_scoped(self, project: Union[str, int], environment: Union[str, int]) -> List[Secret]:
         """List every secret within one project's environment.
 
+        Follows every page the server reports (`data.total_pages`) at
+        page_size=100, so a scope with more secrets than fit on one page
+        (the server defaults to 20) is never silently truncated.
+
         Args:
             project: Project name (resolved to an ID and cached on this
                      Client) or numeric project ID (no resolution round trip).
@@ -343,10 +342,60 @@ class Client:
         """
         project_id = self._resolve_project(project)
         env_id = self._resolve_environment(project_id, environment)
-        path = f"/api/v1/secrets?project_id={project_id}&environment_id={env_id}"
-        data = self._request("GET", path)
-        secrets_data = data.get("data", {}).get("secrets", [])
-        return [Secret._from_dict(s) for s in secrets_data]
+
+        all_secrets: List[Secret] = []
+        page = 1
+        while True:
+            path = (
+                f"/api/v1/secrets?project_id={project_id}&environment_id={env_id}"
+                f"&page={page}&page_size=100"
+            )
+            data = self._request("GET", path).get("data", {})
+            all_secrets.extend(Secret._from_dict(s) for s in data.get("secrets", []))
+            if page >= data.get("total_pages", 0):
+                break
+            page += 1
+        return all_secrets
+
+    def get_secret_in(self, project: str, environment: str, name: str) -> str:
+        """Get the value of secret `name` within `project`/`environment`, all
+        by name, via a single server-authorized round trip -- a thin wrapper
+        around get_secret_by_ref. Unlike get_secret_scoped, this needs no
+        project/environment-list permission, since the server resolves and
+        authorizes the whole reference itself. project/environment/name are
+        joined with "/" -- if any contains a literal "/", call
+        get_secret_by_ref directly with your own escaping.
+
+        Returns:
+            Plaintext secret value
+        """
+        return self.get_secret_by_ref(f"{project}/{environment}/{name}")
+
+    def get_secret_by_ref(self, ref: str) -> str:
+        """Get a secret's value by its "project/environment/name" reference,
+        via GET /api/v1/secrets/value?ref=<ref>. The server resolves and
+        authorizes ref against the resolved secret's own scope in one round
+        trip -- no project/environment-list permission needed, unlike
+        get_secret_scoped. The secret name may itself contain "/"; only the
+        first two "/"-separated segments of ref are taken as project and
+        environment.
+
+        Raises:
+            NotFoundError: ref resolves to nothing and the caller holds the
+                global permission needed to confirm that.
+            ForbiddenError: either the token lacks permission outright, OR
+                ref resolves to nothing and the caller does NOT hold that
+                global permission -- the server denies without confirming
+                the resource exists, to avoid existence enumeration.
+            AuthError: the token is missing or invalid.
+            KeyorixError: a malformed ref (not "project/environment/name")
+                or any other error -- see _error_for_response.
+
+        Returns:
+            Plaintext secret value
+        """
+        data = self._request("GET", f"/api/v1/secrets/value?ref={urllib.parse.quote(ref, safe='')}")
+        return data.get("data", {}).get("value", "")
 
     def get_secret_scoped(
         self, name: str, project: Union[str, int], environment: Union[str, int]

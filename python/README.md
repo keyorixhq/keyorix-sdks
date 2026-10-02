@@ -26,10 +26,14 @@ Zero dependencies — stdlib only. Or just copy keyorix.py into your project.
     #   token = keyorix.login("https://your-server:8443", "admin", "your-password")
     #   client = keyorix.Client("https://your-server:8443", token)
 
-    # Scoped to a project + environment -- an environment name is only
-    # unique within one project, not globally.
-    db_password = client.get_secret_scoped("db-password", "my-project", "production")
+    # Get a secret value, identified entirely by name -- one round trip,
+    # resolved and authorized server-side. No project/environment-list
+    # permission required, so this is the shape that works for a machine
+    # token scoped to exactly one project.
+    db_password = client.get_secret_in("my-project", "production", "db-password")
 
+    # Already have (or want to cache) project/environment IDs instead of
+    # names? Use the *_scoped methods.
     secrets = client.list_secrets_scoped("my-project", "production")
     for s in secrets:
         print(s.name, s.type)
@@ -38,7 +42,7 @@ Zero dependencies — stdlib only. Or just copy keyorix.py into your project.
 
     import os, keyorix
     client = keyorix.Client(os.environ["KEYORIX_SERVER"], os.environ["KEYORIX_TOKEN"])
-    db_password = client.get_secret_scoped("db-password", "my-project", "production")
+    db_password = client.get_secret_in("my-project", "production", "db-password")
 
 ## API
 
@@ -49,8 +53,20 @@ Zero dependencies — stdlib only. Or just copy keyorix.py into your project.
 - keyorix.login(server_url, username, password) -> str — authenticates
   with a human's username/password. For interactive use, not for an
   application's long-running credential.
-- client.get_secret_scoped(name, project, environment) -> str
-- client.list_secrets_scoped(project, environment) -> list
+- client.get_secret_in(project, environment, name) -> str — a single
+  server-authorized round trip
+  (`GET /api/v1/secrets/value?ref=project/environment/name`). Needs no
+  project/environment-list permission, unlike `get_secret_scoped`.
+- client.get_secret_by_ref(ref) -> str — same as `get_secret_in`, but takes
+  one `"project/environment/name"` string (the name may itself contain `/`)
+  instead of three arguments. `get_secret_in` is a thin wrapper around this.
+- client.get_secret_scoped(name, project, environment) -> str — prefer
+  `get_secret_in` unless you already have (or want to cache)
+  project/environment IDs: this costs up to two extra round trips to
+  resolve a name-based project/environment the first time, and needs
+  project/environment-list permission to do so.
+- client.list_secrets_scoped(project, environment) -> list — follows every
+  page the server reports.
 - client.health() -> bool
 
 `project`/`environment` each accept either a name (`str`, resolved to an ID via
