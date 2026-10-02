@@ -6,6 +6,24 @@ All notable changes to the Go SDK are documented here.
 
 ### Added
 
+- `Client.GetSecretByRef(ctx, ref)` (`GET /api/v1/secrets/value?ref=project/environment/name`)
+  and `Client.GetSecretIn(ctx, project, environment, name)` (a thin wrapper
+  that builds the ref). Both resolve and authorize in a single round trip and
+  need no project/environment-list permission, unlike `GetSecretScoped` —
+  the shape a machine token scoped to exactly one project needs. Errors map
+  through the existing `errorForResponse` (`AuthError`/`ForbiddenError`/
+  `NotFoundError`/generic `*APIError`), reusing the typed errors added below
+  rather than a second error set.
+
+### Fixed
+
+- **`ListSecretsScoped` silently truncated at the server's default page size
+  (20).** It never sent `page`/`page_size` at all, so a project+environment
+  with more than 20 secrets lost the rest with no error. Now follows every
+  page the server reports (`total_pages`) at `page_size=100`.
+
+### Added
+
 - `AuthError` (401), `ForbiddenError` (403), and `NotFoundError` (404) —
   every request path now returns a typed error `errors.As` can distinguish,
   instead of one generic `*APIError` for everything. All three unwrap to

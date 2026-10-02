@@ -41,16 +41,19 @@ func main() {
     //   token, err := keyorix.Login(ctx, "https://your-server:8443", "admin", "your-password")
     //   client, err = keyorix.New("https://your-server:8443", token)
 
-    // Get a secret value — scoped to a project + environment, since an
-    // environment name is only unique within one project, not globally.
-    dbPassword, err := client.GetSecretScoped(ctx, "db-password",
-        keyorix.ProjectByName("my-project"), keyorix.EnvironmentByName("production"))
+    // Get a secret value, identified entirely by name — one round trip,
+    // resolved and authorized server-side. No project/environment-list
+    // permission required, so this is the shape that works for a machine
+    // token scoped to exactly one project.
+    dbPassword, err := client.GetSecretIn(ctx, "my-project", "production", "db-password")
     if err != nil {
         log.Fatal(err)
     }
     fmt.Println("DB password:", dbPassword)
 
-    // List all secrets in a project's environment
+    // Already have (or want to cache) project/environment IDs instead of
+    // names? Use the *Scoped methods — ProjectByID/EnvironmentByID resolve
+    // with no network call at all.
     secrets, err := client.ListSecretsScoped(ctx,
         keyorix.ProjectByName("my-project"), keyorix.EnvironmentByName("production"))
     if err != nil {
@@ -78,14 +81,29 @@ Authenticates with a human's username/password and returns a session token.
 For interactive use (a developer at a terminal, the CLI's own login flow) —
 not for an application's long-running credential.
 
+### `client.GetSecretIn(ctx, project, environment, name string) (string, error)`
+Returns the plaintext value of secret `name` in `project`/`environment`
+(all by name), via a single server-authorized round trip
+(`GET /api/v1/secrets/value?ref=project/environment/name`). Needs no
+project/environment-list permission, unlike `GetSecretScoped`.
+
+### `client.GetSecretByRef(ctx, ref string) (string, error)`
+Same as `GetSecretIn`, but takes one `"project/environment/name"` string (the
+name may itself contain `/`) instead of three arguments — `GetSecretIn` is a
+thin wrapper around this.
+
 ### `client.GetSecretScoped(ctx, name string, project ProjectRef, environment EnvironmentRef) (string, error)`
 Returns the plaintext value of a secret by name, within one project's environment.
 `name` is matched exactly among the secrets in that scope: zero matches returns
 `*SecretNotFoundError`, more than one returns `*AmbiguousSecretError` (listing every
-matching ID) — it never guesses.
+matching ID) — it never guesses. Prefer `GetSecretIn` unless you already have (or
+want to cache) project/environment IDs: `GetSecretScoped` costs up to two extra
+round trips to resolve a name-based `ProjectRef`/`EnvironmentRef` the first time,
+and needs project/environment-list permission to do so.
 
 ### `client.ListSecretsScoped(ctx, project ProjectRef, environment EnvironmentRef) ([]Secret, error)`
-Returns every secret within one project's environment.
+Returns every secret within one project's environment, following every page
+the server reports.
 
 `project`/`environment` are each either `keyorix.ProjectByName("name")` /
 `keyorix.EnvironmentByName("name")` (resolved to an ID via the server and cached on
