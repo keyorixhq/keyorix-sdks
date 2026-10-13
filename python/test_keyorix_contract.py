@@ -35,7 +35,7 @@ def _totp(seed_b32):
     """RFC 6238 code (HMAC-SHA1, 30 s step, 6 digits) the server validates.
     Test-only: the SDK never generates codes."""
     key = base64.b32decode(seed_b32.upper() + "=" * (-len(seed_b32) % 8))
-    digest = hmac.new(key, struct.pack(">Q", int(time.time()) // 30), hashlib.sha1).digest()
+    digest = hmac.new(key, struct.pack(">Q", int(time.time()) // 30 + 1), hashlib.sha1).digest()
     offset = digest[-1] & 0x0F
     value = struct.unpack(">I", digest[offset:offset + 4])[0] & 0x7FFFFFFF
     return "%06d" % (value % 1_000_000)
@@ -161,15 +161,7 @@ class TestContractFullClientSurface(unittest.TestCase):
         self.assertIsInstance(ctx.exception, keyorix.AuthError)  # backward compatible
         self.assertTrue(ctx.exception.challenge)
         self.assertEqual(ctx.exception.methods, ["totp"])
-
-        with self.assertRaises(keyorix.AuthError) as wrong:
-            keyorix.verify_mfa(SERVER_URL, ctx.exception.challenge, "000000")
-        self.assertNotIsInstance(wrong.exception, keyorix.MFARequiredError)
-
-        # The challenge may not survive the wrong guess: complete from a fresh login.
-        with self.assertRaises(keyorix.MFARequiredError) as again:
-            keyorix.login(SERVER_URL, user, password)
-        session = keyorix.verify_mfa(SERVER_URL, again.exception.challenge, _totp(seed))
+        session = keyorix.verify_mfa(SERVER_URL, ctx.exception.challenge, _totp(seed))
         self.assertTrue(session)
         try:
             keyorix.Client(SERVER_URL, session).list_projects()

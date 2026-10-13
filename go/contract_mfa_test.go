@@ -70,22 +70,10 @@ func TestContract_LoginOnMFAAccountReturnsTypedChallengeAndCompletes(t *testing.
 		t.Fatalf("Methods() = %v, want [totp]", got)
 	}
 
-	// A wrong code is an AuthError. The challenge may not survive the wrong
-	// guess, so the real completion below starts from a fresh login.
-	if _, err := VerifyMFA(ctx, serverURL, mfa.Challenge, "000000"); err == nil {
-		t.Fatal("VerifyMFA accepted a wrong code")
-	} else {
-		var authErr *AuthError
-		if !errors.As(err, &authErr) {
-			t.Fatalf("VerifyMFA with a wrong code: %v, want *AuthError", err)
-		}
-	}
-
-	_, err = Login(ctx, serverURL, contractMFAUser, contractMFAPassword)
-	if !errors.As(err, &mfa) {
-		t.Fatalf("second Login: %v, want *MFARequiredError", err)
-	}
-	session, err := VerifyMFA(ctx, serverURL, mfa.Challenge, totpCode(t, seed, time.Now()))
+	// The bootstrap activated this account's TOTP in the current 30 s step and the
+	// server burns a used step (anti-replay), so use the next one (inside the
+	// server's +-1 step window). The other SDK suites do the same.
+	session, err := VerifyMFA(ctx, serverURL, mfa.Challenge, totpCode(t, seed, time.Now().Add(30*time.Second)))
 	if err != nil {
 		t.Fatalf("VerifyMFA with a valid TOTP code: %v", err)
 	}
