@@ -127,7 +127,7 @@ class RefAndPaginationTest {
         "409, SecretMaxReadsExhausted, maximum number of reads",
         "403, SecretAccessOutsideSchedule, outside its access schedule",
     })
-    void getSecretByRef_secretReadRefusals(int status, String code, String want) throws IOException {
+    void getSecretByRef_secretReadRefusals(int status, String code, String want) throws IOException, KeyorixException {
         server = HttpServer.create(new InetSocketAddress("localhost", 0), 0);
         server.createContext("/api/v1/secrets/value", exchange -> json(exchange, status,
                 "{\"success\":false,\"code\":" + status + ",\"error\":\"" + code + "\",\"message\":\"SERVER-TEXT\"}"));
