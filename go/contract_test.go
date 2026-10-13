@@ -30,11 +30,11 @@ import (
 // image (see .github/workflows/contract.yml) and a local run can provide via
 // `go run ./server` from a keyorix checkout (see CONTRIBUTING.md).
 //
-// The server is expected to be freshly bootstrapped (no admin yet) so this
-// test can claim the bootstrap token itself and know the exact resulting
-// state (one "default" project, three environments) -- it does not assume
-// any other seeding. KEYORIX_CONTRACT_BOOTSTRAP_TOKEN must match the
-// server's configured KEYORIX_BOOTSTRAP_TOKEN.
+// The server is expected to be freshly bootstrapped by
+// scripts/contract_bootstrap.py (which claims the bootstrap token, enrols the
+// admin in MFA and exports KEYORIX_CONTRACT_ADMIN_TOKEN), so the test knows the
+// exact resulting state (one "default" project, three environments) -- it does
+// not assume any other seeding. The server keeps MFA enforced.
 func contractServerURL(t *testing.T) string {
 	t.Helper()
 	url := os.Getenv("KEYORIX_CONTRACT_SERVER_URL")
@@ -44,43 +44,54 @@ func contractServerURL(t *testing.T) string {
 	return url
 }
 
-// seedAdminSession bootstraps a fresh server (idempotent -- a second run
-// against an already-initialized server just logs in instead) and returns a
-// valid session token, via raw HTTP: /system/init and /auth/login are not
-// part of this SDK's own public surface (Login is, and is used for the
-// second call), so bootstrap must go directly over HTTP.
-func seedAdminSession(t *testing.T, serverURL string) string {
+// seedAdminSession returns the admin credential for the contract suite. The
+// server enforces MFA by default (security.require_mfa, ADR-112), so a
+// password-only login cannot authenticate: scripts/contract_bootstrap.py
+// bootstraps the admin, enrols TOTP, completes the real MFA step and mints a
+// PAT, exported as KEYORIX_CONTRACT_ADMIN_TOKEN. MFA is never turned off.
+func seedAdminSession(t *testing.T, _ string) string {
 	t.Helper()
-	bootstrapToken := os.Getenv("KEYORIX_CONTRACT_BOOTSTRAP_TOKEN")
-	if bootstrapToken == "" {
-		t.Fatal("KEYORIX_CONTRACT_BOOTSTRAP_TOKEN must be set alongside KEYORIX_CONTRACT_SERVER_URL")
-	}
-
-	body, _ := json.Marshal(map[string]string{
-		"username":        "contract-admin",
-		"email":           "contract-admin@example.com",
-		"password":        "ContractTestPassw0rd!",
-		"bootstrap_token": bootstrapToken,
-	})
-	resp, err := http.Post(serverURL+"/system/init", "application/json", bytes.NewReader(body)) //nolint:gosec // serverURL is the operator-supplied contract-test target, not attacker input
-	if err != nil {
-		t.Fatalf("POST /system/init: %v", err)
-	}
-	defer resp.Body.Close()
-	// 200/201 (first boot) or 200 with already_initialized=true (idempotent
-	// re-run) are both fine; anything else (e.g. a rejected bootstrap token)
-	// is not.
-	if resp.StatusCode >= 300 {
-		t.Fatalf("POST /system/init: unexpected status %d", resp.StatusCode)
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	token, err := Login(ctx, serverURL, "contract-admin", "ContractTestPassw0rd!")
-	if err != nil {
-		t.Fatalf("Login after bootstrap: %v", err)
+	token := os.Getenv("KEYORIX_CONTRACT_ADMIN_TOKEN")
+	if token == "" {
+		t.Fatal("KEYORIX_CONTRACT_ADMIN_TOKEN must be set alongside KEYORIX_CONTRACT_SERVER_URL (run scripts/contract_bootstrap.py)")
 	}
 	return token
+}
+
+// TestContract_PasswordLoginReturnsMFAChallenge keeps the MFA-by-default
+// behaviour covered: a user with no token who logs in with only a password gets
+// an MFA challenge, not a session. A challenge login keeps its rate-limit slot
+// until the second factor completes (10 per 15 min per IP), so this makes
+// exactly one login call, on the raw response, rather than also calling Login.
+func TestContract_PasswordLoginReturnsMFAChallenge(t *testing.T) {
+	serverURL := contractServerURL(t)
+	seedAdminSession(t, serverURL) // the bootstrap has enrolled the admin in MFA
+
+	body, _ := json.Marshal(map[string]string{"username": "contract-admin", "password": "ContractTestPassw0rd!"})
+	resp, err := http.Post(serverURL+"/auth/login", "application/json", bytes.NewReader(body)) //nolint:gosec // serverURL is the operator-supplied contract-test target, not attacker input
+	if err != nil {
+		t.Fatalf("POST /auth/login: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("POST /auth/login: unexpected status %d", resp.StatusCode)
+	}
+	var result struct {
+		Data struct {
+			Token        string `json:"token"`
+			MFARequired  bool   `json:"mfa_required"`
+			MFAChallenge string `json:"mfa_challenge"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		t.Fatalf("decode login response: %v", err)
+	}
+	if !result.Data.MFARequired || result.Data.MFAChallenge == "" {
+		t.Fatal("password-only login did not return an MFA challenge")
+	}
+	if result.Data.Token != "" {
+		t.Fatal("password-only login returned a session token despite MFA")
+	}
 }
 
 // seedSecret creates a secret directly over HTTP (CreateSecret is not part of
@@ -363,12 +374,20 @@ func TestContract_FullClientSurface(t *testing.T) {
 		}
 		// A brand-new machine identity holds no roles, so this must
 		// authenticate (not AuthError) even though it can't yet be
-		// authorized for anything (ForbiddenError) -- proving the token is
-		// recognized as valid, distinct from being permitted.
-		_, err = machineClient.ListProjects(ctx)
+		// authorized for anything -- proving the token is recognized as
+		// valid, distinct from being permitted. Current keyorix main answers
+		// a role-less machine's project listing with an empty,
+		// permission-filtered list; older servers answered 403
+		// (ForbiddenError). Either proves "authenticated but not
+		// authorized"; seeing projects, or an AuthError, does not.
+		projects, err := machineClient.ListProjects(ctx)
 		var forbidden *ForbiddenError
-		if !errors.As(err, &forbidden) {
-			t.Errorf("ListProjects with a fresh machine token: got %T (%v), want *ForbiddenError", err, err)
+		switch {
+		case errors.As(err, &forbidden):
+		case err != nil:
+			t.Errorf("ListProjects with a fresh machine token: got %T (%v), want an empty list or *ForbiddenError", err, err)
+		case len(projects) != 0:
+			t.Errorf("ListProjects with a fresh machine token returned %d projects, want none (the identity holds no roles)", len(projects))
 		}
 	})
 
