@@ -12,8 +12,8 @@
 // Distinct from test.js's own KEYORIX_SERVER-gated integration block: that
 // one assumes a pre-seeded "petstore" example server (docker-compose,
 // postgres, admin/Admin123!, a secret named petstore-db-password). This test
-// is self-contained -- it bootstraps its own fresh admin account via
-// /system/init -- so CI can run it against a bare `go run ./server` +
+// is self-contained apart from the admin credential, which
+// scripts/contract_bootstrap.py provides (see seedAdminSession) -- so CI can run it against a bare `go run ./server` +
 // SQLite, no Docker/Postgres fixture required (see .github/workflows/
 // contract.yml). JavaScript's JSON.parse does no case-insensitive key
 // matching (unlike Go's encoding/json), so this test is the most sensitive
@@ -22,7 +22,15 @@
 // Skipped unless KEYORIX_CONTRACT_SERVER_URL is set.
 
 const http = require('node:http');
-const { Client, login, ForbiddenError } = require('./keyorix');
+const {
+  Client,
+  login,
+  verifyMfa,
+  AuthError,
+  MFARequiredError,
+  ForbiddenError,
+  SecretUnavailableError,
+} = require('./keyorix');
 
 let passed = 0;
 let failed = 0;
@@ -55,17 +63,106 @@ function postJSON(serverUrl, path, body, token) {
   });
 }
 
-async function seedAdminSession(serverUrl, bootstrapToken) {
-  const initResp = await postJSON(serverUrl, '/system/init', {
-    username: 'contract-admin',
-    email: 'contract-admin@example.com',
-    password: 'ContractTestPassw0rd!',
-    bootstrap_token: bootstrapToken,
-  });
-  if (initResp.statusCode >= 300) {
-    throw new Error(`POST /system/init: unexpected status ${initResp.statusCode}: ${initResp.body}`);
+// The server enforces MFA by default (security.require_mfa, ADR-112), so a
+// password-only login cannot authenticate: scripts/contract_bootstrap.py
+// bootstraps the admin, enrols TOTP, completes the real MFA step and mints a
+// PAT, exported as KEYORIX_CONTRACT_ADMIN_TOKEN. MFA is never turned off.
+function seedAdminSession() {
+  const token = process.env.KEYORIX_CONTRACT_ADMIN_TOKEN;
+  if (!token) {
+    throw new Error('KEYORIX_CONTRACT_ADMIN_TOKEN must be set alongside KEYORIX_CONTRACT_SERVER_URL (run scripts/contract_bootstrap.py)');
   }
-  return login(serverUrl, 'contract-admin', 'ContractTestPassw0rd!');
+  return token;
+}
+
+// Keeps MFA-by-default covered: a user with no token who logs in with only a
+// password gets an MFA challenge, not a session. A challenge login keeps its
+// rate-limit slot until the second factor completes (10 per 15 min per IP), so
+// this makes exactly one login call, on the raw response, not also login().
+async function checkPasswordLoginReturnsMFAChallenge(serverUrl) {
+  const resp = await postJSON(serverUrl, '/auth/login', {
+    username: 'contract-admin',
+    password: 'ContractTestPassw0rd!',
+  });
+  const data = JSON.parse(resp.body)?.data ?? {};
+  assert(resp.statusCode === 200 && data.mfa_required === true && Boolean(data.mfa_challenge),
+    'password-only login returns an MFA challenge');
+  assert(!data.token, 'password-only login returns no session token');
+}
+
+// RFC 6238 code (HMAC-SHA1, 30 s step, 6 digits) the server validates.
+// Test-only: the SDK never generates codes.
+function base32Decode(s) {
+  const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
+  let bits = '';
+  for (const c of s.toUpperCase().replace(/=+$/, '')) bits += alphabet.indexOf(c).toString(2).padStart(5, '0');
+  const bytes = [];
+  for (let i = 0; i + 8 <= bits.length; i += 8) bytes.push(parseInt(bits.slice(i, i + 8), 2));
+  return Buffer.from(bytes);
+}
+
+function totpCode(seed) {
+  const step = Buffer.alloc(8);
+  step.writeBigUInt64BE(BigInt(Math.floor(Date.now() / 1000 / 30) + 1));
+  const sum = require('node:crypto').createHmac('sha1', base32Decode(seed)).update(step).digest();
+  const off = sum[sum.length - 1] & 0x0f;
+  const v = sum.readUInt32BE(off) & 0x7fffffff;
+  return String(v % 1000000).padStart(6, '0');
+}
+
+// scripts/contract_bootstrap.py creates "contract-mfa-node" (MFA enrolled, seed
+// exported as KEYORIX_CONTRACT_MFA_SEED_NODE). login() on it must throw the
+// typed MFARequiredError carrying the challenge, and verifyMfa() with a TOTP code
+// from the seed must yield a working session. MFA stays enforced throughout.
+async function checkLoginMfaFlow(serverUrl) {
+  const seed = process.env.KEYORIX_CONTRACT_MFA_SEED_NODE;
+  if (!seed) throw new Error('KEYORIX_CONTRACT_MFA_SEED_NODE must be set (run scripts/contract_bootstrap.py)');
+  const user = 'contract-mfa-node';
+  const password = 'ContractMfaUserPassw0rd!';
+
+  let mfa;
+  try {
+    await login(serverUrl, user, password);
+  } catch (e) {
+    mfa = e;
+  }
+  assert(mfa instanceof MFARequiredError, `login() on an MFA account throws MFARequiredError — got ${mfa && mfa.constructor.name}`);
+  assert(mfa instanceof AuthError, 'MFARequiredError is still an AuthError (backward compatible)');
+  assert(mfa && Boolean(mfa.challenge), 'MFARequiredError carries the challenge id');
+  assert(mfa && JSON.stringify(mfa.methods) === JSON.stringify(['totp']), `methods is ['totp'] — got ${mfa && JSON.stringify(mfa.methods)}`);
+  const session = await verifyMfa(serverUrl, mfa.challenge, totpCode(seed));
+  assert(typeof session === 'string' && session.length > 0, 'verifyMfa() with a TOTP code from the seed returns a session');
+  try {
+    await new Client(serverUrl, session).listProjects();
+    assert(true, 'the session authenticates');
+  } catch (e) {
+    assert(!(e instanceof AuthError), `the session authenticates — got ${e.constructor.name}`);
+  }
+}
+
+// scripts/contract_bootstrap.py creates one secret per refusal state through the
+// API; each must map to the SDK's typed error with the server's stable code and
+// must not leak the value.
+async function checkSecretReadRefusals(serverUrl, token) {
+  const client = new Client(serverUrl, token);
+  const cases = [
+    ['contract-refused-suspended', SecretUnavailableError, 409, 'SecretSuspended'],
+    ['contract-refused-expired', SecretUnavailableError, 409, 'SecretExpired'],
+    ['contract-refused-max-reads', SecretUnavailableError, 409, 'SecretMaxReadsExhausted'],
+    ['contract-refused-schedule', ForbiddenError, 403, 'SecretAccessOutsideSchedule'],
+  ];
+  for (const [name, Type, status, code] of cases) {
+    let err;
+    try {
+      await client.getSecretIn('default', 'development', name);
+    } catch (e) {
+      err = e;
+    }
+    assert(err instanceof Type && err.statusCode === status && err.errorCode === code,
+      `${code}: ${status} maps to ${Type.name} with errorCode — got ${err && err.constructor.name}/${err && err.statusCode}/${err && err.errorCode}`);
+    assert(err && !err.message.includes('must-not-leak') && !String(err.responseBody).includes('must-not-leak'),
+      `${code}: the value does not leak`);
+  }
 }
 
 async function seedSecret(serverUrl, token, projectId, environmentId, name, value) {
@@ -130,16 +227,15 @@ async function runContractTests() {
     console.log('KEYORIX_CONTRACT_SERVER_URL not set -- skipping contract test (needs a real keyorix-server)');
     return;
   }
-  const bootstrapToken = process.env.KEYORIX_CONTRACT_BOOTSTRAP_TOKEN;
-  if (!bootstrapToken) {
-    throw new Error('KEYORIX_CONTRACT_BOOTSTRAP_TOKEN must be set alongside KEYORIX_CONTRACT_SERVER_URL');
-  }
-
   console.log('Contract tests');
   console.log('==============');
 
-  const token = await seedAdminSession(serverUrl, bootstrapToken);
+  const token = seedAdminSession();
   const client = new Client(serverUrl, token);
+
+  await checkPasswordLoginReturnsMFAChallenge(serverUrl);
+  await checkLoginMfaFlow(serverUrl);
+  await checkSecretReadRefusals(serverUrl, token);
 
   assert(await client.health() === true, 'health()');
 
@@ -185,14 +281,17 @@ async function runContractTests() {
 
   const machineToken = await createMachineToken(serverUrl, token, defaultProject.id);
   const machineClient = new Client(serverUrl, machineToken);
+  // A brand-new machine identity holds no roles, so this must authenticate (not
+  // AuthError) even though it can't yet be authorized for anything -- proving
+  // the token is recognized as valid, distinct from being permitted. Current
+  // keyorix main answers a role-less machine's project listing with an empty,
+  // permission-filtered list; older servers answered 403 (ForbiddenError).
+  // Either proves "authenticated but not authorized"; seeing projects, or an
+  // AuthError, does not.
   try {
-    await machineClient.listProjects();
-    assert(false, 'expected a fresh machine token (no roles yet) to be forbidden, not succeed');
+    const machineProjects = await machineClient.listProjects();
+    assert(machineProjects.length === 0, `Client works transparently with a machine identity token — got ${machineProjects.length} projects, want none (the identity holds no roles)`);
   } catch (e) {
-    // A brand-new machine identity holds no roles, so this must authenticate
-    // (not AuthError) even though it can't yet be authorized for anything
-    // (ForbiddenError) -- proving the token is recognized as valid, distinct
-    // from being permitted.
     assert(e instanceof ForbiddenError, `Client works transparently with a machine identity token — got ${e.constructor.name}, want ForbiddenError`);
   }
 

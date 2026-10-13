@@ -63,7 +63,13 @@ String dbPassword = client.getSecretIn("my-project", "production", "db-password"
   identity token over a user's password.
 - Keyorix.login(serverUrl, username, password) -> String — authenticates
   with a human's username/password. For interactive use, not for an
-  application's long-running credential.
+  application's long-running credential. On an account with a second factor
+  (MFA, the server default) it throws `MFARequiredException` (an
+  `AuthException`) carrying `getChallenge()` and `getMethods()` ("totp",
+  "webauthn"); complete it with
+  `Keyorix.verifyMfa(serverUrl, e.getChallenge(), totpCode)` -> String (TOTP or
+  recovery code; a wrong or expired one throws `AuthException`). A passkey
+  needs a browser ceremony the SDK does not run.
 - client.getSecretIn(project, environment, name) -> String — a single
   server-authorized round trip
   (`GET /api/v1/secrets/value?ref=project/environment/name`). Needs no

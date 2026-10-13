@@ -30,11 +30,14 @@ const https = require('node:https');
 // Callers who need the body for their own (redacted) logging can read the
 // responseBody property directly.
 class KeyorixError extends Error {
-  constructor(message, { statusCode, responseBody } = {}) {
+  constructor(message, { statusCode, responseBody, errorCode } = {}) {
     super(message);
     this.name = 'KeyorixError';
     this.statusCode = statusCode;
     this.responseBody = responseBody;
+    // The server's stable error code (the error envelope's "error" field, e.g.
+    // "SecretSuspended"), or undefined when the body carries none.
+    this.errorCode = errorCode;
   }
 }
 
@@ -42,6 +45,24 @@ class AuthError extends KeyorixError {
   constructor(message, opts) {
     super(message, opts);
     this.name = 'AuthError';
+  }
+}
+
+// Thrown by login() when the password was accepted but the account has a
+// second factor, so the server answered with an MFA challenge instead of a
+// session. Still an AuthError (login() used to throw a generic AuthError here),
+// so existing `instanceof AuthError` handlers keep working. Complete the login
+// with verifyMfa(serverUrl, err.challenge, code). `methods` lists the second
+// factors the account has ('totp', 'webauthn'); this SDK completes only TOTP or
+// recovery codes -- a passkey needs a browser ceremony.
+class MFARequiredError extends AuthError {
+  constructor({ challenge, totpAvailable, webauthnAvailable }) {
+    super('Multi-factor authentication required — complete the login with verifyMfa()');
+    this.name = 'MFARequiredError';
+    this.challenge = challenge;
+    this.totpAvailable = totpAvailable;
+    this.webauthnAvailable = webauthnAvailable;
+    this.methods = [totpAvailable && 'totp', webauthnAvailable && 'webauthn'].filter(Boolean);
   }
 }
 
@@ -82,16 +103,55 @@ class AmbiguousSecretError extends KeyorixError {
   }
 }
 
+// Thrown when the token may read the secret but the secret's own state
+// refuses the value read (HTTP 409): it has expired, is suspended, or has used
+// up its max-reads budget. errorCode says which; each is reversible by an
+// operator.
+class SecretUnavailableError extends KeyorixError {
+  constructor(message, opts) {
+    super(message, opts);
+    this.name = 'SecretUnavailableError';
+  }
+}
+
+// Stable error codes the server sends when a secret's own state refuses a value
+// read. A read outside the access schedule is a 403 (ForbiddenError with this
+// errorCode); the other three are a 409 (SecretUnavailableError).
+const CODE_SECRET_ACCESS_OUTSIDE_SCHEDULE = 'SecretAccessOutsideSchedule';
+const SECRET_UNAVAILABLE_MESSAGES = {
+  SecretExpired: 'The secret has expired',
+  SecretSuspended: 'The secret is suspended',
+  SecretMaxReadsExhausted: 'The secret has reached its maximum number of reads',
+};
+
+function errorCodeOf(body) {
+  try {
+    const parsed = JSON.parse(body);
+    return parsed && typeof parsed.error === 'string' ? parsed.error : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 // Maps a non-2xx HTTP status to a typed error: AuthError (401),
-// ForbiddenError (403), NotFoundError (404), or the generic KeyorixError
-// for anything else. Every request path returns through this so callers
-// can rely on `instanceof` matching consistently, regardless of which
-// method failed.
+// ForbiddenError (403), NotFoundError (404), SecretUnavailableError (409 with
+// a secret-state code), or the generic KeyorixError for anything else. Every
+// request path returns through this so callers can rely on `instanceof`
+// matching consistently, regardless of which method failed.
 function errorForResponse(status, body) {
-  const opts = { statusCode: status, responseBody: body };
+  const errorCode = errorCodeOf(body);
+  const opts = { statusCode: status, responseBody: body, errorCode };
   if (status === 401) return new AuthError('Unauthorized — check your token', opts);
-  if (status === 403) return new ForbiddenError('Forbidden — token lacks permission for this request', opts);
+  if (status === 403) {
+    if (errorCode === CODE_SECRET_ACCESS_OUTSIDE_SCHEDULE) {
+      return new ForbiddenError('Forbidden — the secret is outside its access schedule', opts);
+    }
+    return new ForbiddenError('Forbidden — token lacks permission for this request', opts);
+  }
   if (status === 404) return new NotFoundError('Resource not found', opts);
+  if (status === 409 && Object.prototype.hasOwnProperty.call(SECRET_UNAVAILABLE_MESSAGES, errorCode)) {
+    return new SecretUnavailableError(SECRET_UNAVAILABLE_MESSAGES[errorCode], opts);
+  }
   return new KeyorixError(`Server returned ${status}`, opts);
 }
 
@@ -166,13 +226,32 @@ function validateServerUrl(serverUrl) {
  * @returns {Promise<string>} Session token
  */
 async function login(serverUrl, username, password, timeout = 30000) {
+  return authRequest(serverUrl, '/auth/login', { username, password }, timeout, 'Login');
+}
+
+/**
+ * Complete a password login that threw MFARequiredError: exchange its
+ * `challenge` and a current TOTP (or recovery) code for a session token. A
+ * wrong or expired code or challenge is an AuthError.
+ *
+ * @param {string} serverUrl - Base URL of your Keyorix server
+ * @param {string} challenge - `MFARequiredError.challenge`
+ * @param {string} code - TOTP or recovery code
+ * @param {number} [timeout=30000] - Timeout in milliseconds
+ * @returns {Promise<string>} Session token
+ */
+async function verifyMfa(serverUrl, challenge, code, timeout = 30000) {
+  return authRequest(serverUrl, '/auth/mfa/verify', { mfa_challenge: challenge, code }, timeout, 'MFA verify');
+}
+
+async function authRequest(serverUrl, path, payload, timeout, what) {
   validateServerUrl(serverUrl);
   const base = parseUrl(serverUrl);
-  const body = JSON.stringify({ username, password });
+  const body = JSON.stringify(payload);
 
   const options = {
     ...base,
-    path: '/auth/login',
+    path,
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -189,13 +268,23 @@ async function login(serverUrl, username, password, timeout = 30000) {
   }
 
   if (resp.status !== 200) {
-    throw new AuthError(`Login failed (HTTP ${resp.status})`, { statusCode: resp.status, responseBody: resp.body });
+    throw new AuthError(`${what} failed (HTTP ${resp.status})`, {
+      statusCode: resp.status,
+      responseBody: resp.body,
+      errorCode: errorCodeOf(resp.body),
+    });
   }
 
-  const data = JSON.parse(resp.body);
-  const token = data?.data?.token;
-  if (!token) throw new AuthError('No token in login response');
-  return token;
+  const data = JSON.parse(resp.body)?.data;
+  if (data?.token) return data.token;
+  if (data?.mfa_required && data.mfa_challenge) {
+    throw new MFARequiredError({
+      challenge: data.mfa_challenge,
+      totpAvailable: data.totp_available === true,
+      webauthnAvailable: data.webauthn_available === true,
+    });
+  }
+  throw new AuthError(`No token in ${what.toLowerCase()} response`);
 }
 
 // ── Client ───────────────────────────────────────────────────────────────────
@@ -505,10 +594,13 @@ class Client {
 module.exports = {
   Client,
   login,
+  verifyMfa,
   KeyorixError,
   AuthError,
+  MFARequiredError,
   ForbiddenError,
   NotFoundError,
+  SecretUnavailableError,
   SecretNotFoundError,
   AmbiguousSecretError,
 };

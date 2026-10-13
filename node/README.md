@@ -52,7 +52,12 @@ Zero external dependencies. Uses Node.js built-in http/https modules.
   user's password.
 - keyorix.login(serverUrl, username, password) -> Promise<string> —
   authenticates with a human's username/password. For interactive use, not
-  for an application's long-running credential.
+  for an application's long-running credential. On an account with a second
+  factor (MFA, the server default) it throws `MFARequiredError` (an
+  `AuthError`) carrying `.challenge` and `.methods` (`'totp'`, `'webauthn'`);
+  complete it with `keyorix.verifyMfa(serverUrl, err.challenge, totpCode)` ->
+  `Promise<string>` (TOTP or recovery code; a wrong or expired one throws
+  `AuthError`). A passkey needs a browser ceremony the SDK does not run.
 - client.getSecretIn(project, environment, name) -> Promise<string> — a
   single server-authorized round trip
   (`GET /api/v1/secrets/value?ref=project/environment/name`). Needs no
@@ -88,6 +93,7 @@ server — use `getSecretScoped`/`listSecretsScoped` instead.
 
 - KeyorixError — base
 - AuthError — authentication failure
+- MFARequiredError — `login()` got an MFA challenge (an `AuthError`; `.challenge`, `.methods`)
 - SecretNotFoundError — secret not found
 - AmbiguousSecretError — secret name matched more than one secret in scope (`.ids`)
 

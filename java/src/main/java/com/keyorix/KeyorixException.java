@@ -15,23 +15,29 @@ public class KeyorixException extends Exception {
 
     private final Integer statusCode;
     private final String responseBody;
+    private final String errorCode;
 
     public KeyorixException(String message) {
-        this(message, null, null, null);
+        this(message, null, null, null, null);
     }
 
     public KeyorixException(String message, Throwable cause) {
-        this(message, cause, null, null);
+        this(message, cause, null, null, null);
     }
 
     public KeyorixException(String message, int statusCode, String responseBody) {
-        this(message, null, statusCode, responseBody);
+        this(message, null, statusCode, responseBody, null);
     }
 
-    private KeyorixException(String message, Throwable cause, Integer statusCode, String responseBody) {
+    public KeyorixException(String message, int statusCode, String responseBody, String errorCode) {
+        this(message, null, statusCode, responseBody, errorCode);
+    }
+
+    private KeyorixException(String message, Throwable cause, Integer statusCode, String responseBody, String errorCode) {
         super(message, cause);
         this.statusCode = statusCode;
         this.responseBody = responseBody;
+        this.errorCode = errorCode;
     }
 
     /** HTTP status code that caused this exception, or null if not applicable. */
@@ -39,4 +45,10 @@ public class KeyorixException extends Exception {
 
     /** Raw server response body that caused this exception, or null if not applicable. */
     public String getResponseBody() { return responseBody; }
+
+    /**
+     * The server's stable error code (the error envelope's "error" field, e.g.
+     * "SecretSuspended"), or null when the body carries none.
+     */
+    public String getErrorCode() { return errorCode; }
 }

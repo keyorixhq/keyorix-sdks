@@ -37,10 +37,20 @@ class KeyorixError(Exception):
     logging can read the response_body attribute directly.
     """
 
-    def __init__(self, message: str, *, status_code: Optional[int] = None, response_body: Optional[str] = None):
+    def __init__(
+        self,
+        message: str,
+        *,
+        status_code: Optional[int] = None,
+        response_body: Optional[str] = None,
+        code: Optional[str] = None,
+    ):
         super().__init__(message)
         self.status_code = status_code
         self.response_body = response_body
+        # The server's stable error code (the error envelope's "error" field,
+        # e.g. "SecretSuspended"), or None when the body carries none.
+        self.code = code
 
 
 def _is_loopback_host(host: Optional[str]) -> bool:
@@ -80,6 +90,29 @@ class AuthError(KeyorixError):
     pass
 
 
+class MFARequiredError(AuthError):
+    """Raised by login() when the password was accepted but the account has a
+    second factor, so the server answered with an MFA challenge instead of a
+    session. Still an AuthError (login() used to raise a generic AuthError
+    here), so existing ``except AuthError`` handlers keep working.
+
+    Complete the login with ``verify_mfa(server_url, e.challenge, code)``.
+    ``methods`` lists the second factors the account has ("totp", "webauthn");
+    this SDK completes only TOTP or recovery codes, a passkey needs a browser
+    ceremony. The challenge is single-use and short-lived.
+    """
+
+    def __init__(self, challenge: str, *, totp_available: bool = False, webauthn_available: bool = False):
+        super().__init__("Multi-factor authentication required — complete the login with verify_mfa()")
+        self.challenge = challenge
+        self.totp_available = totp_available
+        self.webauthn_available = webauthn_available
+
+    @property
+    def methods(self) -> List[str]:
+        return [m for m, ok in (("totp", self.totp_available), ("webauthn", self.webauthn_available)) if ok]
+
+
 class ForbiddenError(KeyorixError):
     """Raised when the server rejects a request as unauthorized for this
     token's permissions (HTTP 403).
@@ -97,22 +130,64 @@ class NotFoundError(KeyorixError):
     pass
 
 
+# Stable error codes the server sends when a secret's own state refuses a value
+# read. A read outside the access schedule is a 403 (ForbiddenError with this
+# code); the other three are a 409 (SecretUnavailableError).
+CODE_SECRET_ACCESS_OUTSIDE_SCHEDULE = "SecretAccessOutsideSchedule"
+CODE_SECRET_EXPIRED = "SecretExpired"
+CODE_SECRET_SUSPENDED = "SecretSuspended"
+CODE_SECRET_MAX_READS_EXHAUSTED = "SecretMaxReadsExhausted"
+
+_SECRET_UNAVAILABLE_MESSAGES = {
+    CODE_SECRET_EXPIRED: "The secret has expired",
+    CODE_SECRET_SUSPENDED: "The secret is suspended",
+    CODE_SECRET_MAX_READS_EXHAUSTED: "The secret has reached its maximum number of reads",
+}
+
+
+class SecretUnavailableError(KeyorixError):
+    """Raised when the token may read the secret but the secret's own state
+    refuses the value read (HTTP 409): it has expired, is suspended, or has
+    used up its max-reads budget. ``code`` says which; each is reversible by
+    an operator.
+    """
+
+    pass
+
+
+def _error_code(body: str) -> Optional[str]:
+    try:
+        parsed = json.loads(body)
+    except (ValueError, TypeError):
+        return None
+    if isinstance(parsed, dict) and isinstance(parsed.get("error"), str):
+        return parsed["error"]
+    return None
+
+
 def _error_for_response(status_code: int, body: str) -> KeyorixError:
     """Maps a non-2xx HTTP status to a typed error: AuthError (401),
-    ForbiddenError (403), NotFoundError (404), or the generic KeyorixError
+    ForbiddenError (403), NotFoundError (404), SecretUnavailableError (409
+    with a secret-state code), or the generic KeyorixError
     for anything else. Every request path raises through this so callers
     can rely on isinstance() matching consistently, regardless of which
     method failed.
     """
+    code = _error_code(body)
     if status_code == 401:
-        return AuthError("Unauthorized — check your token", status_code=status_code, response_body=body)
+        return AuthError("Unauthorized — check your token", status_code=status_code, response_body=body, code=code)
     if status_code == 403:
-        return ForbiddenError(
-            "Forbidden — token lacks permission for this request", status_code=status_code, response_body=body
-        )
+        message = "Forbidden — token lacks permission for this request"
+        if code == CODE_SECRET_ACCESS_OUTSIDE_SCHEDULE:
+            message = "Forbidden — the secret is outside its access schedule"
+        return ForbiddenError(message, status_code=status_code, response_body=body, code=code)
     if status_code == 404:
-        return NotFoundError("Resource not found", status_code=status_code, response_body=body)
-    return KeyorixError(f"Server returned {status_code}", status_code=status_code, response_body=body)
+        return NotFoundError("Resource not found", status_code=status_code, response_body=body, code=code)
+    if status_code == 409 and code in _SECRET_UNAVAILABLE_MESSAGES:
+        return SecretUnavailableError(
+            _SECRET_UNAVAILABLE_MESSAGES[code], status_code=status_code, response_body=body, code=code
+        )
+    return KeyorixError(f"Server returned {status_code}", status_code=status_code, response_body=body, code=code)
 
 
 class SecretNotFoundError(KeyorixError):
@@ -207,28 +282,54 @@ def login(server_url: str, username: str, password: str, timeout: int = 30) -> s
         AuthError: If authentication fails
         KeyorixError: On other errors
     """
+    return _auth_request(server_url, "/auth/login", {"username": username, "password": password}, timeout, "Login")
+
+
+def verify_mfa(server_url: str, challenge: str, code: str, timeout: int = 30) -> str:
+    """Complete a password login that raised MFARequiredError.
+
+    Exchanges the error's ``challenge`` and a current TOTP (or recovery) code
+    for a session token.
+
+    Raises:
+        AuthError: If the code or challenge is wrong or expired
+        KeyorixError: On other errors
+    """
+    return _auth_request(
+        server_url, "/auth/mfa/verify", {"mfa_challenge": challenge, "code": code}, timeout, "MFA verify"
+    )
+
+
+def _auth_request(server_url: str, path: str, payload: dict, timeout: int, what: str) -> str:
     _validate_server_url(server_url)
-    payload = json.dumps({"username": username, "password": password}).encode()
     req = urllib.request.Request(
-        f"{server_url.rstrip('/')}/auth/login",
-        data=payload,
+        f"{server_url.rstrip('/')}{path}",
+        data=json.dumps(payload).encode(),
         headers={"Content-Type": "application/json"},
         method="POST",
     )
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
-            data = json.loads(resp.read())
-            token = data.get("data", {}).get("token", "")
-            if not token:
-                raise AuthError("No token in login response")
-            return token
+            data = json.loads(resp.read()).get("data", {})
     except urllib.error.HTTPError as e:
         body = e.read().decode(errors="replace")
-        raise AuthError(f"Login failed (HTTP {e.code})", status_code=e.code, response_body=body) from e
+        raise AuthError(
+            f"{what} failed (HTTP {e.code})", status_code=e.code, response_body=body, code=_error_code(body)
+        ) from e
     except urllib.error.URLError as e:
         raise KeyorixError(f"Server unreachable: {e.reason}") from e
     except TimeoutError as e:
         raise KeyorixError(f"Request timed out: {e}") from e
+
+    if data.get("token"):
+        return data["token"]
+    if data.get("mfa_required") and data.get("mfa_challenge"):
+        raise MFARequiredError(
+            data["mfa_challenge"],
+            totp_available=data.get("totp_available") is True,
+            webauthn_available=data.get("webauthn_available") is True,
+        )
+    raise AuthError(f"No token in {what.lower()} response")
 
 
 class Client:
