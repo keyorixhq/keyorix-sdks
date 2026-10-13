@@ -135,7 +135,9 @@ class RefAndPaginationTest {
 
         KeyorixClient client = new KeyorixClient("http://localhost:" + server.getAddress().getPort(), "tok");
         KeyorixException ex = assertThrows(KeyorixException.class, () -> client.getSecretByRef("p/e/n"));
-        assertInstanceOf(status == 403 ? ForbiddenException.class : SecretUnavailableException.class, ex);
+        Class<? extends KeyorixException> want403or409 =
+                status == 403 ? ForbiddenException.class : SecretUnavailableException.class;
+        assertTrue(want403or409.isInstance(ex), "expected " + want403or409.getSimpleName() + ", got " + ex.getClass());
         assertEquals(code, ex.getErrorCode());
         assertTrue(ex.getMessage().contains(want), ex.getMessage());
         assertFalse(ex.getMessage().contains("SERVER-TEXT"), ex.getMessage());
