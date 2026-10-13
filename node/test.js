@@ -4,6 +4,8 @@ const http = require('node:http');
 const {
   Client,
   login,
+  verifyMfa,
+  MFARequiredError,
   KeyorixError,
   AuthError,
   ForbiddenError,
@@ -62,6 +64,47 @@ async function runTests() {
     try { await login('http://example.com:8080', 'user', 'pass'); return false; }
     catch (e) { return e instanceof KeyorixError; }
   })(), 'login rejects non-loopback http://');
+
+  // MFA: a 200 login carrying a challenge is a typed MFARequiredError, and
+  // verifyMfa() completes it.
+  {
+    let verifyBody;
+    const mfaServer = http.createServer((req, res) => {
+      let raw = '';
+      req.on('data', (c) => (raw += c));
+      req.on('end', () => {
+        res.writeHead(req.url === '/auth/login' && JSON.parse(raw).username === 'bare' ? 200 : req.url === '/auth/mfa/verify' && JSON.parse(raw).code === '000000' ? 401 : 200);
+        if (req.url === '/auth/login') {
+          res.end(JSON.parse(raw).username === 'bare'
+            ? JSON.stringify({ data: {} })
+            : JSON.stringify({ data: { mfa_required: true, mfa_challenge: 'chal-1', totp_available: true, webauthn_available: true } }));
+        } else {
+          verifyBody = JSON.parse(raw);
+          res.end(JSON.stringify({ data: { token: 'sess' } }));
+        }
+      });
+    });
+    await new Promise((resolve) => mfaServer.listen(0, resolve));
+    try {
+      const url = `http://localhost:${mfaServer.address().port}`;
+      let mfa;
+      try { await login(url, 'u', 'p'); } catch (e) { mfa = e; }
+      assert(mfa instanceof MFARequiredError && mfa instanceof AuthError, 'login with a challenge throws MFARequiredError (an AuthError)');
+      assert(mfa && mfa.challenge === 'chal-1' && mfa.totpAvailable && mfa.webauthnAvailable, 'MFARequiredError carries the challenge and availability');
+      assert(mfa && JSON.stringify(mfa.methods) === JSON.stringify(['totp', 'webauthn']), 'MFARequiredError.methods lists the factors');
+      assert(mfa && mfa.name === 'MFARequiredError' && !mfa.message.includes('chal-1'), 'MFARequiredError name set, challenge not in message');
+      let bare;
+      try { await login(url, 'bare', 'p'); } catch (e) { bare = e; }
+      assert(bare instanceof AuthError && !(bare instanceof MFARequiredError), 'login with neither token nor challenge is a generic AuthError');
+      assert(await verifyMfa(url, 'chal-1', '123456') === 'sess' && verifyBody.mfa_challenge === 'chal-1' && verifyBody.code === '123456',
+        'verifyMfa posts challenge and code and returns the session');
+      let wrong;
+      try { await verifyMfa(url, 'chal-1', '000000'); } catch (e) { wrong = e; }
+      assert(wrong instanceof AuthError && wrong.statusCode === 401, 'verifyMfa with a wrong code throws AuthError');
+    } finally {
+      mfaServer.close();
+    }
+  }
 
   // Error redaction: server error body must not leak into err.message
   const raw = 'internal: secret_key=super-sensitive-detail';

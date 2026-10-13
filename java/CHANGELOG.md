@@ -6,6 +6,7 @@ All notable changes to the Java SDK are documented here.
 
 ### Added
 
+- `login` on an account with a second factor (MFA, the server default) now throws/raises/returns a typed MFA-required error carrying the challenge id and the available methods, instead of a generic "no token in login response". Complete it with the new `verifyMfa`/`verify_mfa`/`VerifyMFA` (TOTP or recovery code). Node, Python and Java: the new type extends the auth error `login` already threw, so existing handlers keep working.
 - `KeyorixException.getErrorCode()` carries the server's stable error code, and a value read the secret's own state refuses (server ERRMAP-1) is typed: 409 `SecretExpired` / `SecretSuspended` / `SecretMaxReadsExhausted` throws `SecretUnavailableException`; a read outside the secret's access schedule stays `ForbiddenException` (code `SecretAccessOutsideSchedule`) with an accurate message. Messages are local, never the server's body.
 
 ## v0.3.0 (unreleased)

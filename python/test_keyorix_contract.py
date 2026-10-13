@@ -14,8 +14,12 @@ fixture required (see .github/workflows/contract.yml).
 Skipped unless KEYORIX_CONTRACT_SERVER_URL is set.
 """
 
+import base64
+import hashlib
+import hmac
 import json
 import os
+import struct
 import time
 import unittest
 import urllib.error
@@ -25,6 +29,16 @@ import keyorix
 
 SERVER_URL = os.environ.get("KEYORIX_CONTRACT_SERVER_URL", "")
 ADMIN_TOKEN = os.environ.get("KEYORIX_CONTRACT_ADMIN_TOKEN", "")
+
+
+def _totp(seed_b32):
+    """RFC 6238 code (HMAC-SHA1, 30 s step, 6 digits) the server validates.
+    Test-only: the SDK never generates codes."""
+    key = base64.b32decode(seed_b32.upper() + "=" * (-len(seed_b32) % 8))
+    digest = hmac.new(key, struct.pack(">Q", int(time.time()) // 30), hashlib.sha1).digest()
+    offset = digest[-1] & 0x0F
+    value = struct.unpack(">I", digest[offset:offset + 4])[0] & 0x7FFFFFFF
+    return "%06d" % (value % 1_000_000)
 
 
 def _post_json(path, body, token=None):
@@ -131,6 +145,57 @@ class TestContractFullClientSurface(unittest.TestCase):
         self.assertIs(data.get("mfa_required"), True, "password-only login must require MFA")
         self.assertTrue(data.get("mfa_challenge"), "password-only login must return an MFA challenge")
         self.assertFalse(data.get("token"), "password-only login must not return a session token")
+
+    def test_login_on_mfa_account_raises_typed_error_and_completes(self):
+        """scripts/contract_bootstrap.py creates "contract-mfa-python" (MFA
+        enrolled, seed exported as KEYORIX_CONTRACT_MFA_SEED_PYTHON). login()
+        on it must raise MFARequiredError carrying the challenge, and
+        verify_mfa() with a TOTP code from the seed must yield a working
+        session. MFA stays enforced throughout."""
+        seed = os.environ.get("KEYORIX_CONTRACT_MFA_SEED_PYTHON", "")
+        self.assertTrue(seed, "KEYORIX_CONTRACT_MFA_SEED_PYTHON must be set (run scripts/contract_bootstrap.py)")
+        user, password = "contract-mfa-python", "ContractMfaUserPassw0rd!"
+
+        with self.assertRaises(keyorix.MFARequiredError) as ctx:
+            keyorix.login(SERVER_URL, user, password)
+        self.assertIsInstance(ctx.exception, keyorix.AuthError)  # backward compatible
+        self.assertTrue(ctx.exception.challenge)
+        self.assertEqual(ctx.exception.methods, ["totp"])
+
+        with self.assertRaises(keyorix.AuthError) as wrong:
+            keyorix.verify_mfa(SERVER_URL, ctx.exception.challenge, "000000")
+        self.assertNotIsInstance(wrong.exception, keyorix.MFARequiredError)
+
+        # The challenge may not survive the wrong guess: complete from a fresh login.
+        with self.assertRaises(keyorix.MFARequiredError) as again:
+            keyorix.login(SERVER_URL, user, password)
+        session = keyorix.verify_mfa(SERVER_URL, again.exception.challenge, _totp(seed))
+        self.assertTrue(session)
+        try:
+            keyorix.Client(SERVER_URL, session).list_projects()
+        except keyorix.AuthError as e:
+            self.fail(f"the session from verify_mfa was rejected as unauthenticated: {e}")
+        except keyorix.KeyorixError:
+            pass  # an account with no roles may be refused, but it is authenticated
+
+    def test_secret_read_refusals_map_to_typed_errors(self):
+        """scripts/contract_bootstrap.py creates one secret per refusal state
+        through the API; each must map to the SDK's typed error carrying the
+        server's stable code, and the value must not leak."""
+        cases = [
+            ("contract-refused-suspended", keyorix.SecretUnavailableError, 409, keyorix.CODE_SECRET_SUSPENDED),
+            ("contract-refused-expired", keyorix.SecretUnavailableError, 409, keyorix.CODE_SECRET_EXPIRED),
+            ("contract-refused-max-reads", keyorix.SecretUnavailableError, 409, keyorix.CODE_SECRET_MAX_READS_EXHAUSTED),
+            ("contract-refused-schedule", keyorix.ForbiddenError, 403, keyorix.CODE_SECRET_ACCESS_OUTSIDE_SCHEDULE),
+        ]
+        for name, exc_type, status, code in cases:
+            with self.subTest(code=code):
+                with self.assertRaises(exc_type) as ctx:
+                    self.client.get_secret_in("default", "development", name)
+                self.assertEqual(ctx.exception.status_code, status)
+                self.assertEqual(ctx.exception.code, code)
+                self.assertNotIn("must-not-leak", str(ctx.exception))
+                self.assertNotIn("must-not-leak", ctx.exception.response_body)
 
     def test_health(self):
         self.assertTrue(self.client.health())

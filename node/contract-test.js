@@ -22,7 +22,15 @@
 // Skipped unless KEYORIX_CONTRACT_SERVER_URL is set.
 
 const http = require('node:http');
-const { Client, ForbiddenError } = require('./keyorix');
+const {
+  Client,
+  login,
+  verifyMfa,
+  AuthError,
+  MFARequiredError,
+  ForbiddenError,
+  SecretUnavailableError,
+} = require('./keyorix');
 
 let passed = 0;
 let failed = 0;
@@ -80,6 +88,97 @@ async function checkPasswordLoginReturnsMFAChallenge(serverUrl) {
   assert(resp.statusCode === 200 && data.mfa_required === true && Boolean(data.mfa_challenge),
     'password-only login returns an MFA challenge');
   assert(!data.token, 'password-only login returns no session token');
+}
+
+// RFC 6238 code (HMAC-SHA1, 30 s step, 6 digits) the server validates.
+// Test-only: the SDK never generates codes.
+function base32Decode(s) {
+  const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
+  let bits = '';
+  for (const c of s.toUpperCase().replace(/=+$/, '')) bits += alphabet.indexOf(c).toString(2).padStart(5, '0');
+  const bytes = [];
+  for (let i = 0; i + 8 <= bits.length; i += 8) bytes.push(parseInt(bits.slice(i, i + 8), 2));
+  return Buffer.from(bytes);
+}
+
+function totpCode(seed) {
+  const step = Buffer.alloc(8);
+  step.writeBigUInt64BE(BigInt(Math.floor(Date.now() / 1000 / 30)));
+  const sum = require('node:crypto').createHmac('sha1', base32Decode(seed)).update(step).digest();
+  const off = sum[sum.length - 1] & 0x0f;
+  const v = sum.readUInt32BE(off) & 0x7fffffff;
+  return String(v % 1000000).padStart(6, '0');
+}
+
+// scripts/contract_bootstrap.py creates "contract-mfa-node" (MFA enrolled, seed
+// exported as KEYORIX_CONTRACT_MFA_SEED_NODE). login() on it must throw the
+// typed MFARequiredError carrying the challenge, and verifyMfa() with a TOTP code
+// from the seed must yield a working session. MFA stays enforced throughout.
+async function checkLoginMfaFlow(serverUrl) {
+  const seed = process.env.KEYORIX_CONTRACT_MFA_SEED_NODE;
+  if (!seed) throw new Error('KEYORIX_CONTRACT_MFA_SEED_NODE must be set (run scripts/contract_bootstrap.py)');
+  const user = 'contract-mfa-node';
+  const password = 'ContractMfaUserPassw0rd!';
+
+  let mfa;
+  try {
+    await login(serverUrl, user, password);
+  } catch (e) {
+    mfa = e;
+  }
+  assert(mfa instanceof MFARequiredError, `login() on an MFA account throws MFARequiredError — got ${mfa && mfa.constructor.name}`);
+  assert(mfa instanceof AuthError, 'MFARequiredError is still an AuthError (backward compatible)');
+  assert(mfa && Boolean(mfa.challenge), 'MFARequiredError carries the challenge id');
+  assert(mfa && JSON.stringify(mfa.methods) === JSON.stringify(['totp']), `methods is ['totp'] — got ${mfa && JSON.stringify(mfa.methods)}`);
+
+  try {
+    await verifyMfa(serverUrl, mfa.challenge, '000000');
+    assert(false, 'verifyMfa() accepted a wrong code');
+  } catch (e) {
+    assert(e instanceof AuthError && !(e instanceof MFARequiredError), 'verifyMfa() with a wrong code throws AuthError');
+  }
+
+  // The challenge may not survive the wrong guess: complete from a fresh login.
+  let again;
+  try {
+    await login(serverUrl, user, password);
+  } catch (e) {
+    again = e;
+  }
+  assert(again instanceof MFARequiredError, 'second login() throws MFARequiredError');
+  const session = await verifyMfa(serverUrl, again.challenge, totpCode(seed));
+  assert(typeof session === 'string' && session.length > 0, 'verifyMfa() with a TOTP code from the seed returns a session');
+  try {
+    await new Client(serverUrl, session).listProjects();
+    assert(true, 'the session authenticates');
+  } catch (e) {
+    assert(!(e instanceof AuthError), `the session authenticates — got ${e.constructor.name}`);
+  }
+}
+
+// scripts/contract_bootstrap.py creates one secret per refusal state through the
+// API; each must map to the SDK's typed error with the server's stable code and
+// must not leak the value.
+async function checkSecretReadRefusals(serverUrl, token) {
+  const client = new Client(serverUrl, token);
+  const cases = [
+    ['contract-refused-suspended', SecretUnavailableError, 409, 'SecretSuspended'],
+    ['contract-refused-expired', SecretUnavailableError, 409, 'SecretExpired'],
+    ['contract-refused-max-reads', SecretUnavailableError, 409, 'SecretMaxReadsExhausted'],
+    ['contract-refused-schedule', ForbiddenError, 403, 'SecretAccessOutsideSchedule'],
+  ];
+  for (const [name, Type, status, code] of cases) {
+    let err;
+    try {
+      await client.getSecretIn('default', 'development', name);
+    } catch (e) {
+      err = e;
+    }
+    assert(err instanceof Type && err.statusCode === status && err.errorCode === code,
+      `${code}: ${status} maps to ${Type.name} with errorCode — got ${err && err.constructor.name}/${err && err.statusCode}/${err && err.errorCode}`);
+    assert(err && !err.message.includes('must-not-leak') && !String(err.responseBody).includes('must-not-leak'),
+      `${code}: the value does not leak`);
+  }
 }
 
 async function seedSecret(serverUrl, token, projectId, environmentId, name, value) {
@@ -151,6 +250,8 @@ async function runContractTests() {
   const client = new Client(serverUrl, token);
 
   await checkPasswordLoginReturnsMFAChallenge(serverUrl);
+  await checkLoginMfaFlow(serverUrl);
+  await checkSecretReadRefusals(serverUrl, token);
 
   assert(await client.health() === true, 'health()');
 

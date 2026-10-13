@@ -48,6 +48,24 @@ class AuthError extends KeyorixError {
   }
 }
 
+// Thrown by login() when the password was accepted but the account has a
+// second factor, so the server answered with an MFA challenge instead of a
+// session. Still an AuthError (login() used to throw a generic AuthError here),
+// so existing `instanceof AuthError` handlers keep working. Complete the login
+// with verifyMfa(serverUrl, err.challenge, code). `methods` lists the second
+// factors the account has ('totp', 'webauthn'); this SDK completes only TOTP or
+// recovery codes -- a passkey needs a browser ceremony.
+class MFARequiredError extends AuthError {
+  constructor({ challenge, totpAvailable, webauthnAvailable }) {
+    super('Multi-factor authentication required — complete the login with verifyMfa()');
+    this.name = 'MFARequiredError';
+    this.challenge = challenge;
+    this.totpAvailable = totpAvailable;
+    this.webauthnAvailable = webauthnAvailable;
+    this.methods = [totpAvailable && 'totp', webauthnAvailable && 'webauthn'].filter(Boolean);
+  }
+}
+
 // Thrown when the server rejects a request as unauthorized for this
 // token's permissions (HTTP 403).
 class ForbiddenError extends KeyorixError {
@@ -208,13 +226,32 @@ function validateServerUrl(serverUrl) {
  * @returns {Promise<string>} Session token
  */
 async function login(serverUrl, username, password, timeout = 30000) {
+  return authRequest(serverUrl, '/auth/login', { username, password }, timeout, 'Login');
+}
+
+/**
+ * Complete a password login that threw MFARequiredError: exchange its
+ * `challenge` and a current TOTP (or recovery) code for a session token. A
+ * wrong or expired code or challenge is an AuthError.
+ *
+ * @param {string} serverUrl - Base URL of your Keyorix server
+ * @param {string} challenge - `MFARequiredError.challenge`
+ * @param {string} code - TOTP or recovery code
+ * @param {number} [timeout=30000] - Timeout in milliseconds
+ * @returns {Promise<string>} Session token
+ */
+async function verifyMfa(serverUrl, challenge, code, timeout = 30000) {
+  return authRequest(serverUrl, '/auth/mfa/verify', { mfa_challenge: challenge, code }, timeout, 'MFA verify');
+}
+
+async function authRequest(serverUrl, path, payload, timeout, what) {
   validateServerUrl(serverUrl);
   const base = parseUrl(serverUrl);
-  const body = JSON.stringify({ username, password });
+  const body = JSON.stringify(payload);
 
   const options = {
     ...base,
-    path: '/auth/login',
+    path,
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -231,13 +268,23 @@ async function login(serverUrl, username, password, timeout = 30000) {
   }
 
   if (resp.status !== 200) {
-    throw new AuthError(`Login failed (HTTP ${resp.status})`, { statusCode: resp.status, responseBody: resp.body });
+    throw new AuthError(`${what} failed (HTTP ${resp.status})`, {
+      statusCode: resp.status,
+      responseBody: resp.body,
+      errorCode: errorCodeOf(resp.body),
+    });
   }
 
-  const data = JSON.parse(resp.body);
-  const token = data?.data?.token;
-  if (!token) throw new AuthError('No token in login response');
-  return token;
+  const data = JSON.parse(resp.body)?.data;
+  if (data?.token) return data.token;
+  if (data?.mfa_required && data.mfa_challenge) {
+    throw new MFARequiredError({
+      challenge: data.mfa_challenge,
+      totpAvailable: data.totp_available === true,
+      webauthnAvailable: data.webauthn_available === true,
+    });
+  }
+  throw new AuthError(`No token in ${what.toLowerCase()} response`);
 }
 
 // ── Client ───────────────────────────────────────────────────────────────────
@@ -547,8 +594,10 @@ class Client {
 module.exports = {
   Client,
   login,
+  verifyMfa,
   KeyorixError,
   AuthError,
+  MFARequiredError,
   ForbiddenError,
   NotFoundError,
   SecretUnavailableError,

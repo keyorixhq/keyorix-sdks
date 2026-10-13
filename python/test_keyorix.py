@@ -3,6 +3,7 @@
 import io
 import unittest
 import urllib.error
+import unittest.mock
 from unittest.mock import patch
 import json
 import keyorix
@@ -66,6 +67,50 @@ class TestClient(unittest.TestCase):
     def test_login_rejects_non_loopback_http(self):
         with self.assertRaises(keyorix.KeyorixError):
             keyorix.login("http://example.com:8080", "user", "pass")
+
+    @staticmethod
+    def _ok(payload):
+        resp = unittest.mock.MagicMock()
+        resp.read.return_value = json.dumps(payload).encode()
+        resp.__enter__.return_value = resp
+        return resp
+
+    @patch("keyorix.urllib.request.urlopen")
+    def test_login_mfa_challenge_raises_typed_error(self, mock_urlopen):
+        mock_urlopen.return_value = self._ok(
+            {"data": {"mfa_required": True, "mfa_challenge": "chal-1", "totp_available": True, "webauthn_available": True}}
+        )
+        with self.assertRaises(keyorix.MFARequiredError) as ctx:
+            keyorix.login("http://localhost:8080", "u", "p")
+        e = ctx.exception
+        self.assertIsInstance(e, keyorix.AuthError)  # backward compatible
+        self.assertEqual(e.challenge, "chal-1")
+        self.assertEqual(e.methods, ["totp", "webauthn"])
+        self.assertNotIn("chal-1", str(e))
+
+    @patch("keyorix.urllib.request.urlopen")
+    def test_login_without_token_or_challenge_is_generic_auth_error(self, mock_urlopen):
+        mock_urlopen.return_value = self._ok({"data": {}})
+        with self.assertRaises(keyorix.AuthError) as ctx:
+            keyorix.login("http://localhost:8080", "u", "p")
+        self.assertNotIsInstance(ctx.exception, keyorix.MFARequiredError)
+
+    @patch("keyorix.urllib.request.urlopen")
+    def test_verify_mfa_returns_session_and_posts_challenge_and_code(self, mock_urlopen):
+        mock_urlopen.return_value = self._ok({"data": {"token": "sess"}})
+        self.assertEqual(keyorix.verify_mfa("http://localhost:8080", "chal-1", "123456"), "sess")
+        req = mock_urlopen.call_args[0][0]
+        self.assertTrue(req.full_url.endswith("/auth/mfa/verify"))
+        self.assertEqual(json.loads(req.data), {"mfa_challenge": "chal-1", "code": "123456"})
+
+    @patch("keyorix.urllib.request.urlopen")
+    def test_verify_mfa_wrong_code_is_auth_error(self, mock_urlopen):
+        mock_urlopen.side_effect = urllib.error.HTTPError(
+            "http://localhost:8080/auth/mfa/verify", 401, "Unauthorized", {}, io.BytesIO(b'{"error":"Unauthorized"}')
+        )
+        with self.assertRaises(keyorix.AuthError) as ctx:
+            keyorix.verify_mfa("http://localhost:8080", "c", "000000")
+        self.assertEqual(ctx.exception.status_code, 401)
 
     def test_keyorix_error_message_omits_body(self):
         err = keyorix.KeyorixError(

@@ -90,6 +90,29 @@ class AuthError(KeyorixError):
     pass
 
 
+class MFARequiredError(AuthError):
+    """Raised by login() when the password was accepted but the account has a
+    second factor, so the server answered with an MFA challenge instead of a
+    session. Still an AuthError (login() used to raise a generic AuthError
+    here), so existing ``except AuthError`` handlers keep working.
+
+    Complete the login with ``verify_mfa(server_url, e.challenge, code)``.
+    ``methods`` lists the second factors the account has ("totp", "webauthn");
+    this SDK completes only TOTP or recovery codes, a passkey needs a browser
+    ceremony. The challenge is single-use and short-lived.
+    """
+
+    def __init__(self, challenge: str, *, totp_available: bool = False, webauthn_available: bool = False):
+        super().__init__("Multi-factor authentication required — complete the login with verify_mfa()")
+        self.challenge = challenge
+        self.totp_available = totp_available
+        self.webauthn_available = webauthn_available
+
+    @property
+    def methods(self) -> List[str]:
+        return [m for m, ok in (("totp", self.totp_available), ("webauthn", self.webauthn_available)) if ok]
+
+
 class ForbiddenError(KeyorixError):
     """Raised when the server rejects a request as unauthorized for this
     token's permissions (HTTP 403).
@@ -259,28 +282,54 @@ def login(server_url: str, username: str, password: str, timeout: int = 30) -> s
         AuthError: If authentication fails
         KeyorixError: On other errors
     """
+    return _auth_request(server_url, "/auth/login", {"username": username, "password": password}, timeout, "Login")
+
+
+def verify_mfa(server_url: str, challenge: str, code: str, timeout: int = 30) -> str:
+    """Complete a password login that raised MFARequiredError.
+
+    Exchanges the error's ``challenge`` and a current TOTP (or recovery) code
+    for a session token.
+
+    Raises:
+        AuthError: If the code or challenge is wrong or expired
+        KeyorixError: On other errors
+    """
+    return _auth_request(
+        server_url, "/auth/mfa/verify", {"mfa_challenge": challenge, "code": code}, timeout, "MFA verify"
+    )
+
+
+def _auth_request(server_url: str, path: str, payload: dict, timeout: int, what: str) -> str:
     _validate_server_url(server_url)
-    payload = json.dumps({"username": username, "password": password}).encode()
     req = urllib.request.Request(
-        f"{server_url.rstrip('/')}/auth/login",
-        data=payload,
+        f"{server_url.rstrip('/')}{path}",
+        data=json.dumps(payload).encode(),
         headers={"Content-Type": "application/json"},
         method="POST",
     )
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
-            data = json.loads(resp.read())
-            token = data.get("data", {}).get("token", "")
-            if not token:
-                raise AuthError("No token in login response")
-            return token
+            data = json.loads(resp.read()).get("data", {})
     except urllib.error.HTTPError as e:
         body = e.read().decode(errors="replace")
-        raise AuthError(f"Login failed (HTTP {e.code})", status_code=e.code, response_body=body) from e
+        raise AuthError(
+            f"{what} failed (HTTP {e.code})", status_code=e.code, response_body=body, code=_error_code(body)
+        ) from e
     except urllib.error.URLError as e:
         raise KeyorixError(f"Server unreachable: {e.reason}") from e
     except TimeoutError as e:
         raise KeyorixError(f"Request timed out: {e}") from e
+
+    if data.get("token"):
+        return data["token"]
+    if data.get("mfa_required") and data.get("mfa_challenge"):
+        raise MFARequiredError(
+            data["mfa_challenge"],
+            totp_available=data.get("totp_available") is True,
+            webauthn_available=data.get("webauthn_available") is True,
+        )
+    raise AuthError(f"No token in {what.lower()} response")
 
 
 class Client:

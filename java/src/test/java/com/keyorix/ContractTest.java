@@ -166,6 +166,83 @@ class ContractTest {
         assertNull(JsonParser.extractString(json, "token"), "password-only login must not return a session token");
     }
 
+    /** RFC 6238 code (HMAC-SHA1, 30 s step, 6 digits) the server validates. Test-only:
+     * the SDK never generates codes. */
+    private static String totp(String seedBase32) throws Exception {
+        String alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
+        java.io.ByteArrayOutputStream key = new java.io.ByteArrayOutputStream();
+        int buffer = 0, bits = 0;
+        for (char c : seedBase32.toUpperCase().replace("=", "").toCharArray()) {
+            buffer = (buffer << 5) | alphabet.indexOf(c);
+            bits += 5;
+            if (bits >= 8) {
+                key.write((buffer >> (bits - 8)) & 0xff);
+                bits -= 8;
+            }
+        }
+        javax.crypto.Mac mac = javax.crypto.Mac.getInstance("HmacSHA1");
+        mac.init(new javax.crypto.spec.SecretKeySpec(key.toByteArray(), "HmacSHA1"));
+        byte[] sum = mac.doFinal(java.nio.ByteBuffer.allocate(8).putLong(System.currentTimeMillis() / 1000 / 30).array());
+        int off = sum[sum.length - 1] & 0x0f;
+        int v = ((sum[off] & 0x7f) << 24) | ((sum[off + 1] & 0xff) << 16) | ((sum[off + 2] & 0xff) << 8) | (sum[off + 3] & 0xff);
+        return String.format("%06d", v % 1_000_000);
+    }
+
+    /** scripts/contract_bootstrap.py creates "contract-mfa-java" (MFA enrolled, seed
+     * exported as KEYORIX_CONTRACT_MFA_SEED_JAVA). login() on it must throw
+     * MFARequiredException carrying the challenge, and verifyMfa() with a TOTP code
+     * from the seed must yield a working session. MFA stays enforced throughout. */
+    @Test
+    void loginOnMfaAccountThrowsTypedExceptionAndCompletes() throws Exception {
+        String seed = System.getenv("KEYORIX_CONTRACT_MFA_SEED_JAVA");
+        assertTrue(seed != null && !seed.isEmpty(), "KEYORIX_CONTRACT_MFA_SEED_JAVA must be set (run scripts/contract_bootstrap.py)");
+        String user = "contract-mfa-java";
+        String password = "ContractMfaUserPassw0rd!";
+
+        MFARequiredException mfa = assertThrows(MFARequiredException.class, () -> Keyorix.login(serverUrl, user, password));
+        assertTrue(mfa instanceof AuthException, "still an AuthException (backward compatible)");
+        assertFalse(mfa.getChallenge().isEmpty());
+        assertEquals(List.of("totp"), mfa.getMethods());
+
+        AuthException wrong = assertThrows(AuthException.class, () -> Keyorix.verifyMfa(serverUrl, mfa.getChallenge(), "000000"));
+        assertFalse(wrong instanceof MFARequiredException);
+
+        // The challenge may not survive the wrong guess: complete from a fresh login.
+        MFARequiredException again = assertThrows(MFARequiredException.class, () -> Keyorix.login(serverUrl, user, password));
+        String session = Keyorix.verifyMfa(serverUrl, again.getChallenge(), totp(seed));
+        assertFalse(session.isEmpty());
+        try {
+            Keyorix.newClient(serverUrl, session).listProjects();
+        } catch (AuthException e) {
+            fail("the session from verifyMfa was rejected as unauthenticated: " + e.getMessage());
+        } catch (KeyorixException e) {
+            // an account with no roles may be refused, but it is authenticated
+        }
+    }
+
+    /** scripts/contract_bootstrap.py creates one secret per refusal state through the
+     * API; each must map to the SDK's typed exception carrying the server's stable
+     * code, and the value must not leak. */
+    @Test
+    void secretReadRefusalsMapToTypedExceptions() {
+        String[][] cases = {
+            {"contract-refused-suspended", "409", "SecretSuspended"},
+            {"contract-refused-expired", "409", "SecretExpired"},
+            {"contract-refused-max-reads", "409", "SecretMaxReadsExhausted"},
+            {"contract-refused-schedule", "403", "SecretAccessOutsideSchedule"},
+        };
+        for (String[] c : cases) {
+            int status = Integer.parseInt(c[1]);
+            KeyorixException e = assertThrows(KeyorixException.class,
+                () -> client.getSecretIn("default", "development", c[0]), c[2]);
+            assertEquals(status == 409 ? SecretUnavailableException.class : ForbiddenException.class, e.getClass(), c[2]);
+            assertEquals(status, e.getStatusCode(), c[2]);
+            assertEquals(c[2], e.getErrorCode(), c[2]);
+            assertFalse(e.getMessage().contains("must-not-leak"), c[2]);
+            assertFalse(e.getResponseBody().contains("must-not-leak"), c[2]);
+        }
+    }
+
     @Test
     void health() throws KeyorixException {
         assertTrue(client.health());
