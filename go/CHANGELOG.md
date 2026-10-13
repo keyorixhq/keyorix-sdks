@@ -2,6 +2,12 @@
 
 All notable changes to the Go SDK are documented here.
 
+## Unreleased
+
+### Added
+
+- `APIError.Code` carries the server's stable error code, and a value read the secret's own state refuses (server ERRMAP-1) is typed: 409 `SecretExpired` / `SecretSuspended` / `SecretMaxReadsExhausted` returns `*SecretUnavailableError` (unwraps to `*APIError`); a read outside the secret's access schedule stays `*ForbiddenError` (Code `SecretAccessOutsideSchedule`) with an accurate message. Error text is local, never the server's body. Against an older server these reads still return the generic `*APIError` (500).
+
 ## v0.3.0 — 2026-10-02
 
 ### Added

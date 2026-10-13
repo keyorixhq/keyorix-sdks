@@ -22,11 +22,15 @@ name: Contract
 #
 # One job, one server instance, all four languages run their contract tests
 # against it sequentially -- avoids the cross-job networking complexity of
-# splitting into a matrix, and /system/init's idempotency (a second call
-# reports already_initialized rather than erroring) makes sequential re-use
-# safe: each language bootstraps the same "contract-admin" account (a no-op
-# after the first) and only ever creates its OWN uniquely-named
-# project/secret, so there is no cross-language collision.
+# splitting into a matrix. The server keeps its secure default
+# (security.require_mfa, ADR-112): a password-only session is confined to MFA
+# enrolment, so one "Bootstrap contract admin" step creates the
+# "contract-admin" account, enrols TOTP, completes the real MFA login and mints
+# a short-lived PAT (scripts/contract_bootstrap.py), exported as
+# KEYORIX_CONTRACT_ADMIN_TOKEN (masked, never printed). Every language then
+# authenticates with that token and only ever creates its OWN uniquely-named
+# project/secret, so there is no cross-language collision. Each language also
+# asserts that a password-only login still gets an MFA challenge.
 on:
   workflow_call:
 
@@ -102,6 +106,9 @@ jobs:
           echo "::error::keyorix-server did not become healthy within 30s"
           cat "$RUNNER_TEMP/keyorix-server.log"
           exit 1
+
+      - name: Bootstrap contract admin (MFA stays on)
+        run: python3 sdks/scripts/contract_bootstrap.py --env-file "$GITHUB_ENV"
 
       - name: Go contract test
         working-directory: sdks/go

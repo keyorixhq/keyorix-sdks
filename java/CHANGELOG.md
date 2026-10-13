@@ -2,6 +2,12 @@
 
 All notable changes to the Java SDK are documented here.
 
+## Unreleased
+
+### Added
+
+- `KeyorixException.getErrorCode()` carries the server's stable error code, and a value read the secret's own state refuses (server ERRMAP-1) is typed: 409 `SecretExpired` / `SecretSuspended` / `SecretMaxReadsExhausted` throws `SecretUnavailableException`; a read outside the secret's access schedule stays `ForbiddenException` (code `SecretAccessOutsideSchedule`) with an accurate message. Messages are local, never the server's body.
+
 ## v0.3.0 (unreleased)
 
 ### Added

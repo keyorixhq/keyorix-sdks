@@ -84,6 +84,9 @@ type SecretValue struct {
 type APIError struct {
 	StatusCode int
 	Body       string
+	// Code is the server's stable error code (the error envelope's "error"
+	// field, e.g. "SecretSuspended"), or "" when the body carries none.
+	Code string
 }
 
 func (e *APIError) Error() string {
@@ -102,6 +105,9 @@ func (e *AuthError) Unwrap() error { return e.APIError }
 type ForbiddenError struct{ *APIError }
 
 func (e *ForbiddenError) Error() string {
+	if e.Code == CodeSecretAccessOutsideSchedule {
+		return "keyorix: forbidden — the secret is outside its access schedule"
+	}
 	return "keyorix: forbidden — token lacks permission for this request"
 }
 func (e *ForbiddenError) Unwrap() error { return e.APIError }
@@ -115,13 +121,59 @@ type NotFoundError struct{ *APIError }
 func (e *NotFoundError) Error() string { return "keyorix: resource not found" }
 func (e *NotFoundError) Unwrap() error { return e.APIError }
 
+// Stable error codes the server sends when a secret's own state refuses a value
+// read. A read outside the secret's access schedule is a 403 (ForbiddenError with
+// this Code); the other three are a 409 (SecretUnavailableError).
+const (
+	CodeSecretAccessOutsideSchedule = "SecretAccessOutsideSchedule"
+	CodeSecretExpired               = "SecretExpired"
+	CodeSecretSuspended             = "SecretSuspended"
+	CodeSecretMaxReadsExhausted     = "SecretMaxReadsExhausted"
+)
+
+// SecretUnavailableError indicates the token may read the secret but the
+// secret's own state refuses the value read (HTTP 409): it has expired, is
+// suspended, or has used up its max-reads budget. Code says which. Each is
+// reversible by an operator. Unwraps to *APIError.
+type SecretUnavailableError struct{ *APIError }
+
+func (e *SecretUnavailableError) Error() string {
+	switch e.Code {
+	case CodeSecretExpired:
+		return "keyorix: the secret has expired"
+	case CodeSecretSuspended:
+		return "keyorix: the secret is suspended"
+	default:
+		return "keyorix: the secret has reached its maximum number of reads"
+	}
+}
+func (e *SecretUnavailableError) Unwrap() error { return e.APIError }
+
+// errorCode reads the error envelope's "error" field, or "".
+func errorCode(body string) string {
+	var env struct {
+		Error string `json:"error"`
+	}
+	if json.Unmarshal([]byte(body), &env) != nil {
+		return ""
+	}
+	return env.Error
+}
+
 // errorForResponse maps a non-2xx HTTP status to a typed error: AuthError
-// (401), ForbiddenError (403), NotFoundError (404), or the generic APIError
+// (401), ForbiddenError (403), NotFoundError (404), SecretUnavailableError (409
+// with a secret-state code), or the generic APIError
 // for anything else. Every request path returns through this so callers can
 // rely on errors.As matching consistently, regardless of which method failed.
 func errorForResponse(statusCode int, body string) error {
-	base := &APIError{StatusCode: statusCode, Body: body}
+	base := &APIError{StatusCode: statusCode, Body: body, Code: errorCode(body)}
 	switch statusCode {
+	case http.StatusConflict:
+		switch base.Code {
+		case CodeSecretExpired, CodeSecretSuspended, CodeSecretMaxReadsExhausted:
+			return &SecretUnavailableError{base}
+		}
+		return base
 	case http.StatusUnauthorized:
 		return &AuthError{base}
 	case http.StatusForbidden:

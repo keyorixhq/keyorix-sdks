@@ -37,10 +37,20 @@ class KeyorixError(Exception):
     logging can read the response_body attribute directly.
     """
 
-    def __init__(self, message: str, *, status_code: Optional[int] = None, response_body: Optional[str] = None):
+    def __init__(
+        self,
+        message: str,
+        *,
+        status_code: Optional[int] = None,
+        response_body: Optional[str] = None,
+        code: Optional[str] = None,
+    ):
         super().__init__(message)
         self.status_code = status_code
         self.response_body = response_body
+        # The server's stable error code (the error envelope's "error" field,
+        # e.g. "SecretSuspended"), or None when the body carries none.
+        self.code = code
 
 
 def _is_loopback_host(host: Optional[str]) -> bool:
@@ -97,22 +107,64 @@ class NotFoundError(KeyorixError):
     pass
 
 
+# Stable error codes the server sends when a secret's own state refuses a value
+# read. A read outside the access schedule is a 403 (ForbiddenError with this
+# code); the other three are a 409 (SecretUnavailableError).
+CODE_SECRET_ACCESS_OUTSIDE_SCHEDULE = "SecretAccessOutsideSchedule"
+CODE_SECRET_EXPIRED = "SecretExpired"
+CODE_SECRET_SUSPENDED = "SecretSuspended"
+CODE_SECRET_MAX_READS_EXHAUSTED = "SecretMaxReadsExhausted"
+
+_SECRET_UNAVAILABLE_MESSAGES = {
+    CODE_SECRET_EXPIRED: "The secret has expired",
+    CODE_SECRET_SUSPENDED: "The secret is suspended",
+    CODE_SECRET_MAX_READS_EXHAUSTED: "The secret has reached its maximum number of reads",
+}
+
+
+class SecretUnavailableError(KeyorixError):
+    """Raised when the token may read the secret but the secret's own state
+    refuses the value read (HTTP 409): it has expired, is suspended, or has
+    used up its max-reads budget. ``code`` says which; each is reversible by
+    an operator.
+    """
+
+    pass
+
+
+def _error_code(body: str) -> Optional[str]:
+    try:
+        parsed = json.loads(body)
+    except (ValueError, TypeError):
+        return None
+    if isinstance(parsed, dict) and isinstance(parsed.get("error"), str):
+        return parsed["error"]
+    return None
+
+
 def _error_for_response(status_code: int, body: str) -> KeyorixError:
     """Maps a non-2xx HTTP status to a typed error: AuthError (401),
-    ForbiddenError (403), NotFoundError (404), or the generic KeyorixError
+    ForbiddenError (403), NotFoundError (404), SecretUnavailableError (409
+    with a secret-state code), or the generic KeyorixError
     for anything else. Every request path raises through this so callers
     can rely on isinstance() matching consistently, regardless of which
     method failed.
     """
+    code = _error_code(body)
     if status_code == 401:
-        return AuthError("Unauthorized — check your token", status_code=status_code, response_body=body)
+        return AuthError("Unauthorized — check your token", status_code=status_code, response_body=body, code=code)
     if status_code == 403:
-        return ForbiddenError(
-            "Forbidden — token lacks permission for this request", status_code=status_code, response_body=body
-        )
+        message = "Forbidden — token lacks permission for this request"
+        if code == CODE_SECRET_ACCESS_OUTSIDE_SCHEDULE:
+            message = "Forbidden — the secret is outside its access schedule"
+        return ForbiddenError(message, status_code=status_code, response_body=body, code=code)
     if status_code == 404:
-        return NotFoundError("Resource not found", status_code=status_code, response_body=body)
-    return KeyorixError(f"Server returned {status_code}", status_code=status_code, response_body=body)
+        return NotFoundError("Resource not found", status_code=status_code, response_body=body, code=code)
+    if status_code == 409 and code in _SECRET_UNAVAILABLE_MESSAGES:
+        return SecretUnavailableError(
+            _SECRET_UNAVAILABLE_MESSAGES[code], status_code=status_code, response_body=body, code=code
+        )
+    return KeyorixError(f"Server returned {status_code}", status_code=status_code, response_body=body, code=code)
 
 
 class SecretNotFoundError(KeyorixError):

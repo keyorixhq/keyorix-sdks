@@ -7,8 +7,8 @@ today (verified against a local keyorix-server built from main,
 a wire-format migration to snake_case for a type this SDK parses) lands
 without a matching SDK update.
 
-Self-contained: bootstraps its own fresh admin account via /system/init, so
-CI can run it against a bare `go run ./server` + SQLite, no Docker/Postgres
+Self-contained apart from the admin credential, which
+scripts/contract_bootstrap.py provides (see _seed_admin_session), so CI can run it against a bare `go run ./server` + SQLite, no Docker/Postgres
 fixture required (see .github/workflows/contract.yml).
 
 Skipped unless KEYORIX_CONTRACT_SERVER_URL is set.
@@ -24,7 +24,7 @@ import urllib.request
 import keyorix
 
 SERVER_URL = os.environ.get("KEYORIX_CONTRACT_SERVER_URL", "")
-BOOTSTRAP_TOKEN = os.environ.get("KEYORIX_CONTRACT_BOOTSTRAP_TOKEN", "")
+ADMIN_TOKEN = os.environ.get("KEYORIX_CONTRACT_ADMIN_TOKEN", "")
 
 
 def _post_json(path, body, token=None):
@@ -45,18 +45,16 @@ def _post_json(path, body, token=None):
 
 
 def _seed_admin_session():
-    status, body = _post_json(
-        "/system/init",
-        {
-            "username": "contract-admin",
-            "email": "contract-admin@example.com",
-            "password": "ContractTestPassw0rd!",
-            "bootstrap_token": BOOTSTRAP_TOKEN,
-        },
-    )
-    if status >= 300:
-        raise RuntimeError(f"POST /system/init: unexpected status {status}: {body!r}")
-    return keyorix.login(SERVER_URL, "contract-admin", "ContractTestPassw0rd!")
+    """The server enforces MFA by default (security.require_mfa, ADR-112), so a
+    password-only login cannot authenticate: scripts/contract_bootstrap.py
+    bootstraps the admin, enrols TOTP, completes the real MFA step and mints a
+    PAT, exported as KEYORIX_CONTRACT_ADMIN_TOKEN. MFA is never turned off."""
+    if not ADMIN_TOKEN:
+        raise RuntimeError(
+            "KEYORIX_CONTRACT_ADMIN_TOKEN must be set alongside KEYORIX_CONTRACT_SERVER_URL "
+            "(run scripts/contract_bootstrap.py)"
+        )
+    return ADMIN_TOKEN
 
 
 def _seed_secret(token, project_id, environment_id, name, value):
@@ -116,10 +114,23 @@ def _create_machine_token(admin_token, project_id):
 class TestContractFullClientSurface(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        if not BOOTSTRAP_TOKEN:
-            raise RuntimeError("KEYORIX_CONTRACT_BOOTSTRAP_TOKEN must be set alongside KEYORIX_CONTRACT_SERVER_URL")
         cls.token = _seed_admin_session()
         cls.client = keyorix.Client(SERVER_URL, cls.token)
+
+    def test_password_login_returns_mfa_challenge(self):
+        """Keeps MFA-by-default covered: a user with no token who logs in with
+        only a password gets an MFA challenge, not a session. A challenge login
+        keeps its rate-limit slot until the second factor completes (10 per 15
+        min per IP), so this makes exactly one login call, on the raw response,
+        rather than also calling login()."""
+        status, body = _post_json(
+            "/auth/login", {"username": "contract-admin", "password": "ContractTestPassw0rd!"}
+        )
+        self.assertEqual(status, 200)
+        data = json.loads(body).get("data", {})
+        self.assertIs(data.get("mfa_required"), True, "password-only login must require MFA")
+        self.assertTrue(data.get("mfa_challenge"), "password-only login must return an MFA challenge")
+        self.assertFalse(data.get("token"), "password-only login must not return a session token")
 
     def test_health(self):
         self.assertTrue(self.client.health())
@@ -178,10 +189,17 @@ class TestContractFullClientSurface(unittest.TestCase):
         machine_client = keyorix.Client(SERVER_URL, machine_token)
         # A brand-new machine identity holds no roles, so this must
         # authenticate (not AuthError) even though it can't yet be
-        # authorized for anything (ForbiddenError) -- proving the token is
-        # recognized as valid, distinct from being permitted.
-        with self.assertRaises(keyorix.ForbiddenError):
-            machine_client.list_projects()
+        # authorized for anything -- proving the token is recognized as
+        # valid, distinct from being permitted. Current keyorix main answers
+        # a role-less machine's project listing with an empty,
+        # permission-filtered list; older servers answered 403
+        # (ForbiddenError). Either proves "authenticated but not
+        # authorized"; seeing projects, or an AuthError, does not.
+        try:
+            visible = machine_client.list_projects()
+        except keyorix.ForbiddenError:
+            return
+        self.assertEqual(visible, [], "a machine identity with no roles must see no projects")
 
     def test_timeout_is_enforced_against_a_slow_server(self):
         import http.server

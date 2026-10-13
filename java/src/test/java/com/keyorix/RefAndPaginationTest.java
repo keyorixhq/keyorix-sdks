@@ -12,6 +12,7 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.ValueSource;
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -112,6 +113,34 @@ class RefAndPaginationTest {
         } else {
             fail("unexpected status " + status);
         }
+    }
+
+    // ── A value read the secret's own state refuses (server ERRMAP-1): 409
+    //    with a secret-state code is a SecretUnavailableException carrying the
+    //    code; a schedule refusal stays a ForbiddenException but says what it
+    //    is. Neither message echoes the server's body. ────────────────────
+
+    @ParameterizedTest
+    @CsvSource({
+        "409, SecretExpired, has expired",
+        "409, SecretSuspended, is suspended",
+        "409, SecretMaxReadsExhausted, maximum number of reads",
+        "403, SecretAccessOutsideSchedule, outside its access schedule",
+    })
+    void getSecretByRef_secretReadRefusals(int status, String code, String want) throws IOException, KeyorixException {
+        server = HttpServer.create(new InetSocketAddress("localhost", 0), 0);
+        server.createContext("/api/v1/secrets/value", exchange -> json(exchange, status,
+                "{\"success\":false,\"code\":" + status + ",\"error\":\"" + code + "\",\"message\":\"SERVER-TEXT\"}"));
+        server.start();
+
+        KeyorixClient client = new KeyorixClient("http://localhost:" + server.getAddress().getPort(), "tok");
+        KeyorixException ex = assertThrows(KeyorixException.class, () -> client.getSecretByRef("p/e/n"));
+        Class<? extends KeyorixException> want403or409 =
+                status == 403 ? ForbiddenException.class : SecretUnavailableException.class;
+        assertTrue(want403or409.isInstance(ex), "expected " + want403or409.getSimpleName() + ", got " + ex.getClass());
+        assertEquals(code, ex.getErrorCode());
+        assertTrue(ex.getMessage().contains(want), ex.getMessage());
+        assertFalse(ex.getMessage().contains("SERVER-TEXT"), ex.getMessage());
     }
 
     // ── listSecretsScoped pagination ────────────────────────────────────────
