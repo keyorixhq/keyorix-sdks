@@ -2,6 +2,12 @@
 
 All notable changes to the Python SDK are documented here.
 
+## Unreleased
+
+### Added
+
+- `KeyorixError.code` carries the server's stable error code, and a value read the secret's own state refuses (server ERRMAP-1) is typed: 409 `SecretExpired` / `SecretSuspended` / `SecretMaxReadsExhausted` raises `SecretUnavailableError`; a read outside the secret's access schedule stays `ForbiddenError` (code `SecretAccessOutsideSchedule`) with an accurate message. Messages are local, never the server's body.
+
 ## v0.3.0 (unreleased)
 
 ### Added

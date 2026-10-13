@@ -8,6 +8,7 @@ const {
   AuthError,
   ForbiddenError,
   NotFoundError,
+  SecretUnavailableError,
   SecretNotFoundError,
   AmbiguousSecretError,
 } = require('./keyorix');
@@ -110,6 +111,37 @@ async function runTests() {
       }
     } finally {
       statusServer.close();
+    }
+  }
+
+  // A value read the secret's own state refuses (server ERRMAP-1): 409 with a
+  // secret-state code is a SecretUnavailableError carrying errorCode; a schedule
+  // refusal stays a ForbiddenError but says what it is. Neither message echoes
+  // the server's body.
+  for (const [status, code, ErrorClass, want] of [
+    [409, 'SecretExpired', SecretUnavailableError, 'has expired'],
+    [409, 'SecretSuspended', SecretUnavailableError, 'is suspended'],
+    [409, 'SecretMaxReadsExhausted', SecretUnavailableError, 'maximum number of reads'],
+    [403, 'SecretAccessOutsideSchedule', ForbiddenError, 'outside its access schedule'],
+  ]) {
+    const refusalServer = http.createServer((req, res) => {
+      res.writeHead(status, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ success: false, code: status, error: code, message: 'SERVER-TEXT' }));
+    });
+    await new Promise((resolve) => refusalServer.listen(0, resolve));
+    try {
+      const port = refusalServer.address().port;
+      const c = new Client(`http://localhost:${port}`, 'tok');
+      try {
+        await c.getSecretByRef('p/e/n');
+        assert(false, `getSecretByRef should have thrown on ${code}`);
+      } catch (e) {
+        assert(e instanceof ErrorClass, `${status} ${code} maps to ${ErrorClass.name}`);
+        assert(e.errorCode === code, `${code}: errorCode carries the server code`);
+        assert(e.message.includes(want) && !e.message.includes('SERVER-TEXT'), `${code}: message says why, without server text`);
+      }
+    } finally {
+      refusalServer.close();
     }
   }
 

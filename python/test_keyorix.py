@@ -123,6 +123,44 @@ class TestClient(unittest.TestCase):
             client._request("GET", "/api/v1/secrets")
         self.assertEqual(ctx.exception.status_code, 404)
 
+    # A value read the secret's own state refuses (server ERRMAP-1): 409 with a
+    # secret-state code is a SecretUnavailableError carrying that code; a
+    # schedule refusal stays a ForbiddenError but says what it is. Neither
+    # message echoes the server's body.
+    @patch("keyorix.urllib.request.urlopen")
+    def test_secret_read_refusals(self, mock_urlopen):
+        cases = [
+            (409, "SecretExpired", keyorix.SecretUnavailableError, "has expired"),
+            (409, "SecretSuspended", keyorix.SecretUnavailableError, "is suspended"),
+            (409, "SecretMaxReadsExhausted", keyorix.SecretUnavailableError, "maximum number of reads"),
+            (403, "SecretAccessOutsideSchedule", keyorix.ForbiddenError, "outside its access schedule"),
+        ]
+        client = keyorix.Client("http://localhost:8080", "test-token")
+        for status, code, exc_type, want in cases:
+            with self.subTest(code=code):
+                body = json.dumps({"success": False, "code": status, "error": code, "message": "SERVER-TEXT"})
+                mock_urlopen.side_effect = urllib.error.HTTPError(
+                    "http://localhost:8080/api/v1/secrets/value", status, "x", {}, io.BytesIO(body.encode())
+                )
+                with self.assertRaises(exc_type) as ctx:
+                    client._request("GET", "/api/v1/secrets/value?ref=p/e/n")
+                self.assertEqual(ctx.exception.status_code, status)
+                self.assertEqual(ctx.exception.code, code)
+                self.assertIn(want, str(ctx.exception))
+                self.assertNotIn("SERVER-TEXT", str(ctx.exception))
+
+    @patch("keyorix.urllib.request.urlopen")
+    def test_unrelated_409_stays_generic(self, mock_urlopen):
+        body = json.dumps({"error": "ConflictError", "message": "x"})
+        mock_urlopen.side_effect = urllib.error.HTTPError(
+            "http://localhost:8080/api/v1/secrets", 409, "Conflict", {}, io.BytesIO(body.encode())
+        )
+        client = keyorix.Client("http://localhost:8080", "test-token")
+        with self.assertRaises(keyorix.KeyorixError) as ctx:
+            client._request("GET", "/api/v1/secrets")
+        self.assertNotIsInstance(ctx.exception, keyorix.SecretUnavailableError)
+        self.assertEqual(ctx.exception.code, "ConflictError")
+
     # ── TLS with a private CA ───────────────────────────────────────────────────
     # Proves the ca_file option actually gets verified against, not just
     # plumbed through and ignored. Uses a throwaway self-signed cert

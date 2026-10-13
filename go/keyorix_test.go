@@ -3,6 +3,7 @@ package keyorix
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -233,6 +234,54 @@ func TestErrorForResponse_MapsStatusToTypedError(t *testing.T) {
 				t.Fatal("expected an error")
 			}
 			tc.check(t, err)
+		})
+	}
+}
+
+// A value read the secret's own state refuses (server ERRMAP-1): 409 with a
+// secret-state code is a *SecretUnavailableError carrying that Code; a schedule
+// refusal stays a *ForbiddenError (callers already handle it) but says what it is.
+// Neither error text echoes the server's body.
+func TestErrorForResponse_SecretReadRefusals(t *testing.T) {
+	for _, tc := range []struct {
+		status      int
+		code, want  string
+		unavailable bool
+	}{
+		{http.StatusConflict, CodeSecretExpired, "has expired", true},
+		{http.StatusConflict, CodeSecretSuspended, "is suspended", true},
+		{http.StatusConflict, CodeSecretMaxReadsExhausted, "maximum number of reads", true},
+		{http.StatusForbidden, CodeSecretAccessOutsideSchedule, "outside its access schedule", false},
+		{http.StatusConflict, "ConflictError", "server returned 409", false},
+	} {
+		t.Run(tc.code, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(tc.status)
+				_, _ = fmt.Fprintf(w, `{"success":false,"code":%d,"error":%q,"message":"SERVER-TEXT"}`, tc.status, tc.code)
+			}))
+			defer srv.Close()
+			c, err := New(srv.URL, "test-token")
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = c.GetSecretByRef(context.Background(), "p/e/n")
+			if err == nil || !strings.Contains(err.Error(), tc.want) || strings.Contains(err.Error(), "SERVER-TEXT") {
+				t.Fatalf("error %v: want text %q and no server text", err, tc.want)
+			}
+			var unavailable *SecretUnavailableError
+			if errors.As(err, &unavailable) != tc.unavailable {
+				t.Fatalf("errors.As(*SecretUnavailableError) = %v, want %v (%T)", !tc.unavailable, tc.unavailable, err)
+			}
+			var apiErr *APIError
+			if !errors.As(err, &apiErr) || apiErr.Code != tc.code {
+				t.Fatalf("APIError.Code = %+v, want %q", apiErr, tc.code)
+			}
+			if tc.status == http.StatusForbidden {
+				var forbidden *ForbiddenError
+				if !errors.As(err, &forbidden) {
+					t.Fatalf("a schedule refusal must stay a *ForbiddenError, got %T", err)
+				}
+			}
 		})
 	}
 }

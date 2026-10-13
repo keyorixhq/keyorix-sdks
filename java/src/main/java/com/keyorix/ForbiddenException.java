@@ -5,4 +5,5 @@ public class ForbiddenException extends KeyorixException {
     private static final long serialVersionUID = 1L;
     public ForbiddenException(String message) { super(message); }
     public ForbiddenException(String message, int statusCode, String responseBody) { super(message, statusCode, responseBody); }
+    public ForbiddenException(String message, int statusCode, String responseBody, String errorCode) { super(message, statusCode, responseBody, errorCode); }
 }
