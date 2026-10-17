@@ -11,6 +11,9 @@ All notable changes to the Node.js SDK are documented here.
   generic `AuthError('No token in login response')`. `login(..., { mfaCode })`
   performs the second step for you; `verifyMfa(serverUrl, challenge, code)`
   does it explicitly (`POST /auth/mfa/verify`, TOTP or recovery code).
+- `purgeAt` on secrets and `client.listDeletedSecrets(project)`
+  (`GET /api/v1/projects/{id}/secrets/deleted`): the restore deadline of a
+  soft-deleted secret. Needs server v0.96.0+.
 
 ## v0.3.0 (unreleased)
 

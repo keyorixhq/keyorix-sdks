@@ -11,6 +11,9 @@ All notable changes to the Python SDK are documented here.
   generic `AuthError("No token in login response")`. `login(..., mfa_code=...)`
   performs the second step for you; `verify_mfa(server_url, challenge, code)`
   does it explicitly (`POST /auth/mfa/verify`, TOTP or recovery code).
+- `Secret.purge_at` and `Client.list_deleted_secrets(project)`
+  (`GET /api/v1/projects/{id}/secrets/deleted`): the restore deadline of a
+  soft-deleted secret. Needs server v0.96.0+.
 
 ## v0.3.0 (unreleased)
 

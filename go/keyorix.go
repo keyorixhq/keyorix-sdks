@@ -52,6 +52,10 @@ type Secret struct {
 	ProjectID   uint      `json:"project_id"`
 	Environment string    `json:"environment_name"`
 	CreatedAt   time.Time `json:"created_at"`
+	// PurgeAt is the restore deadline of a soft-deleted secret (as listed by
+	// ListDeletedSecrets): the instant before which the server will not
+	// hard-delete it. nil for a live secret.
+	PurgeAt *time.Time `json:"purge_at,omitempty"`
 }
 
 // Project represents a Keyorix project.
@@ -471,6 +475,44 @@ func (c *Client) ListSecretsScoped(ctx context.Context, project ProjectRef, envi
 	}
 
 	return all, nil
+}
+
+// ListDeletedSecrets lists a project's soft-deleted (restorable) secrets, newest
+// deleted first. Each returned Secret has PurgeAt set: the restore deadline.
+// Requires secrets.read at the project scope. The server caps the list at 500.
+func (c *Client) ListDeletedSecrets(ctx context.Context, project ProjectRef) ([]Secret, error) {
+	projectID, err := c.resolveProject(ctx, project)
+	if err != nil {
+		return nil, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet,
+		fmt.Sprintf("%s/api/v1/projects/%d/secrets/deleted?limit=500", c.baseURL, projectID), nil)
+	if err != nil {
+		return nil, fmt.Errorf("keyorix: failed to create request: %w", err)
+	}
+	req.Header.Set("Authorization", authBearer+c.token)
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("keyorix: request failed: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, errorForResponse(resp.StatusCode, string(body))
+	}
+	var result struct {
+		Data struct {
+			Deleted []Secret `json:"deleted"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, fmt.Errorf("keyorix: failed to parse response: %w", err)
+	}
+	for i := range result.Data.Deleted {
+		result.Data.Deleted[i].ProjectID = projectID
+	}
+	return result.Data.Deleted, nil
 }
 
 // GetSecretIn retrieves the value of secret name within project/environment,

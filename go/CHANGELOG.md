@@ -12,6 +12,9 @@ All notable changes to the Go SDK are documented here.
   `VerifyMFA(ctx, serverURL, challenge, code)` completes the login via
   `POST /auth/mfa/verify` with a TOTP or recovery code. Needs a server with
   `/auth/mfa/verify` (see COMPATIBILITY.md).
+- `Secret.PurgeAt` (`*time.Time`) and `Client.ListDeletedSecrets(ctx, project)`
+  (`GET /api/v1/projects/{id}/secrets/deleted`): the restore deadline of a
+  soft-deleted secret. Needs server v0.96.0+.
 
 ## v0.3.0 — 2026-10-02
 

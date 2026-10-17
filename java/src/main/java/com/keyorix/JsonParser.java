@@ -32,6 +32,25 @@ class JsonParser {
         return result;
     }
 
+    /** Parse the recycle bin from: {"data":{"deleted":[...]}}; purge_at becomes {@link Secret#getPurgeAt()}. */
+    static List<Secret> parseDeletedSecretList(String json, long projectId) {
+        List<String> objects = extractArrayObjects(json, "deleted");
+        List<Secret> result = new ArrayList<>();
+        for (String obj : objects) {
+            try {
+                String name = extractString(obj, "name");
+                if (name == null) continue;
+                String type = extractString(obj, "type");
+                String purgeAt = extractString(obj, "purge_at");
+                result.add(new Secret(parseLong(obj, "id"), name, type != null ? type : "", "", projectId, "",
+                                      purgeAt != null ? purgeAt : ""));
+            } catch (Exception e) {
+                // skip an unparseable entry, as parseSecretList does
+            }
+        }
+        return result;
+    }
+
     /** Extract total_pages from a paginated list response: {"data":{...,"total_pages":N}} */
     static int parseTotalPages(String json) {
         return (int) parseLong(json, "total_pages");

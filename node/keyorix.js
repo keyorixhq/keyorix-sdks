@@ -391,6 +391,26 @@ class Client {
   }
 
   /**
+   * List a project's soft-deleted (restorable) secrets, newest deleted first.
+   * Each entry has `purgeAt`: the instant (RFC 3339, UTC) before which the
+   * server will not hard-delete it, i.e. the restore deadline. Requires
+   * secrets.read at the project scope; the server caps the list at 500.
+   * @param {string|number} project - Project name or numeric project ID.
+   * @returns {Promise<Array>}
+   */
+  async listDeletedSecrets(project) {
+    const projectId = await this._resolveProject(project);
+    const data = await this._request(`/api/v1/projects/${projectId}/secrets/deleted?limit=500`);
+    return (data?.data?.deleted || []).map((s) => ({
+      id: s.id,
+      name: s.name,
+      type: s.type,
+      projectId,
+      purgeAt: s.purge_at,
+    }));
+  }
+
+  /**
    * Get the value of secret `name` within `project`/`environment`, all by
    * name, via a single server-authorized round trip -- a thin wrapper
    * around getSecretByRef. Unlike getSecretScoped, this needs no

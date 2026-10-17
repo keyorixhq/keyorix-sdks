@@ -12,6 +12,9 @@ All notable changes to the Java SDK are documented here.
   login response")`. `Keyorix.login(url, user, pass, mfaCode)` performs the
   second step for you; `Keyorix.verifyMfa(url, challenge, code)` does it
   explicitly (`POST /auth/mfa/verify`, TOTP or recovery code).
+- `Secret.getPurgeAt()` and `KeyorixClient.listDeletedSecrets(projectId)`
+  (`GET /api/v1/projects/{id}/secrets/deleted`): the restore deadline of a
+  soft-deleted secret. Needs server v0.96.0+.
 
 ## v0.3.0 (unreleased)
 

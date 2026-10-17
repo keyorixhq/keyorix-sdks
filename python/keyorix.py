@@ -163,6 +163,9 @@ class Secret:
     project_id: int
     environment: str
     created_at: str
+    #: Restore deadline of a soft-deleted secret (RFC 3339 UTC; see
+    #: Client.list_deleted_secrets). Empty for a live secret.
+    purge_at: str = ""
 
     @classmethod
     def _from_dict(cls, data: dict) -> "Secret":
@@ -173,6 +176,7 @@ class Secret:
             project_id=data.get("project_id", 0),
             environment=data.get("environment_name", ""),
             created_at=data.get("created_at", ""),
+            purge_at=data.get("purge_at", ""),
         )
 
 
@@ -412,6 +416,23 @@ class Client:
                 break
             page += 1
         return all_secrets
+
+    def list_deleted_secrets(self, project: Union[str, int]) -> List[Secret]:
+        """List a project's soft-deleted (restorable) secrets, newest deleted
+        first. Each returned Secret has purge_at set: the instant (RFC 3339,
+        UTC) before which the server will not hard-delete it, i.e. the
+        restore deadline. Requires secrets.read at the project scope; the
+        server caps the list at 500.
+
+        Args:
+            project: Project name or numeric project ID.
+        """
+        project_id = self._resolve_project(project)
+        data = self._request("GET", f"/api/v1/projects/{project_id}/secrets/deleted?limit=500").get("data", {})
+        secrets = [Secret._from_dict(s) for s in data.get("deleted", [])]
+        for s in secrets:
+            s.project_id = project_id
+        return secrets
 
     def get_secret_in(self, project: str, environment: str, name: str) -> str:
         """Get the value of secret `name` within `project`/`environment`, all

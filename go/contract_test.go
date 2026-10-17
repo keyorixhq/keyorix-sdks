@@ -521,3 +521,76 @@ func TestContract_MFALogin(t *testing.T) {
 		t.Errorf("Health with the MFA-obtained token: %v", err)
 	}
 }
+
+func TestContract_DeletedSecretPurgeAt(t *testing.T) {
+	serverURL := contractServerURL(t)
+	token := seedAdminSession(t, serverURL)
+	client, err := New(serverURL, token)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	projects, err := client.ListProjects(ctx)
+	if err != nil {
+		t.Fatalf("ListProjects: %v", err)
+	}
+	var projectID uint
+	for _, p := range projects {
+		if p.Name == "default" {
+			projectID = p.ID
+		}
+	}
+	envs, err := client.ListEnvironments(ctx, projectID)
+	if err != nil {
+		t.Fatalf("ListEnvironments: %v", err)
+	}
+	var devEnvID uint
+	for _, e := range envs {
+		if e.Name == "development" {
+			devEnvID = e.ID
+		}
+	}
+	if projectID == 0 || devEnvID == 0 {
+		t.Fatal("default project / development environment not found")
+	}
+
+	name := fmt.Sprintf("contract-purge-%d", time.Now().UnixNano())
+	seedSecret(t, serverURL, token, projectID, devEnvID, name, "v")
+	live, err := client.ListSecretsScoped(ctx, ProjectByID(projectID), EnvironmentByID(devEnvID))
+	if err != nil {
+		t.Fatalf("ListSecretsScoped: %v", err)
+	}
+	var id uint
+	for _, s := range live {
+		if s.Name == name {
+			id = s.ID
+			if s.PurgeAt != nil {
+				t.Errorf("live secret has PurgeAt %v, want nil", s.PurgeAt)
+			}
+		}
+	}
+	if id == 0 {
+		t.Fatalf("seeded secret %q not found", name)
+	}
+	authedJSON(t, http.MethodDelete, fmt.Sprintf("%s/api/v1/secrets/%d", serverURL, id), token, nil, nil)
+
+	deleted, err := client.ListDeletedSecrets(ctx, ProjectByID(projectID))
+	if err != nil {
+		t.Fatalf("ListDeletedSecrets: %v", err)
+	}
+	for _, s := range deleted {
+		if s.ID != id {
+			continue
+		}
+		if s.PurgeAt == nil {
+			t.Fatal("soft-deleted secret has nil PurgeAt")
+		}
+		if d := time.Until(*s.PurgeAt); d < 29*24*time.Hour || d > 31*24*time.Hour {
+			t.Errorf("PurgeAt %v is not ~30 days out (retention_days=30)", s.PurgeAt)
+		}
+		return
+	}
+	t.Fatalf("soft-deleted secret %d not in ListDeletedSecrets (%d entries)", id, len(deleted))
+}
