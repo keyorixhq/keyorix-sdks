@@ -21,6 +21,8 @@ Add to your `pom.xml`:
 ```java
 import com.keyorix.Keyorix;
 import com.keyorix.KeyorixClient;
+import com.keyorix.Secret;
+import java.util.List;
 
 // Recommended for apps: a machine identity token, not a user password.
 // Issue one via `keyorix machine token issue <name|id>` (or the web UI's
@@ -99,8 +101,11 @@ contacting the server — use `getSecretScoped`/`listSecretsScoped` instead.
 ## Exceptions
 
 - KeyorixException — base
-- AuthException — authentication failure
-- SecretNotFoundException — secret not found
+- AuthException — authentication failure (HTTP 401)
+- ForbiddenException — token authenticated but not permitted (HTTP 403)
+- NotFoundException — resource not found (HTTP 404), which is what
+  `getSecretIn`/`getSecretByRef` throw for a missing secret, project or environment
+- SecretNotFoundException — thrown by `getSecretScoped` when no secret in the scope has that name
 - AmbiguousSecretException — secret name matched more than one secret in scope (`getIds()`)
 
 ## Requirements

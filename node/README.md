@@ -12,6 +12,9 @@ Zero external dependencies. Uses Node.js built-in http/https modules.
 
     const keyorix = require('@keyorixhq/sdk');
 
+    // The calls below are async: run them inside an async function (CommonJS
+    // has no top-level await).
+
     // Recommended for apps: a machine identity token, not a user password.
     // Issue one via `keyorix machine token issue <name|id>` (or the web
     // UI's Project -> Machine Identities -> Issue Token), then load it
@@ -87,8 +90,11 @@ server — use `getSecretScoped`/`listSecretsScoped` instead.
 ## Errors
 
 - KeyorixError — base
-- AuthError — authentication failure
-- SecretNotFoundError — secret not found
+- AuthError — authentication failure (HTTP 401)
+- ForbiddenError — token authenticated but not permitted (HTTP 403)
+- NotFoundError — resource not found (HTTP 404), which is what
+  `getSecretIn`/`getSecretByRef` throw for a missing secret, project or environment
+- SecretNotFoundError — thrown by `getSecretScoped` when no secret in the scope has that name
 - AmbiguousSecretError — secret name matched more than one secret in scope (`.ids`)
 
 ## Requirements
