@@ -44,6 +44,19 @@ def _post_json(path, body, token=None):
         return e.code, e.read()
 
 
+def _get_status(path, token):
+    req = urllib.request.Request(
+        f"{SERVER_URL}{path}",
+        headers={"Authorization": f"Bearer {token}"},
+        method="GET",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            return resp.status
+    except urllib.error.HTTPError as e:
+        return e.code
+
+
 def _seed_admin_session():
     status, body = _post_json(
         "/system/init",
@@ -176,12 +189,19 @@ class TestContractFullClientSurface(unittest.TestCase):
         default = next(p for p in projects if p.name == "default")
         machine_token = _create_machine_token(self.token, default.id)
         machine_client = keyorix.Client(SERVER_URL, machine_token)
-        # A brand-new machine identity holds no roles, so this must
-        # authenticate (not AuthError) even though it can't yet be
-        # authorized for anything (ForbiddenError) -- proving the token is
-        # recognized as valid, distinct from being permitted.
-        with self.assertRaises(keyorix.ForbiddenError):
-            machine_client.list_projects()
+        # A brand-new machine identity holds no grants, so since keyorix
+        # #2780 GET /projects answers 200 with an empty list (not 403): the
+        # token is recognized as valid and simply sees nothing.
+        self.assertEqual(machine_client.list_projects(), [])
+
+        # Proves the same token is authenticated but not authorized: a
+        # project-scoped read of the project it was minted in is 403.
+        status = _get_status(f"/api/v1/projects/{default.id}", machine_token)
+        self.assertEqual(status, 403)
+
+        # A bad token must still be a 401, not an empty 200.
+        with self.assertRaises(keyorix.AuthError):
+            keyorix.Client(SERVER_URL, "not-a-real-token").list_projects()
 
     def test_timeout_is_enforced_against_a_slow_server(self):
         import http.server

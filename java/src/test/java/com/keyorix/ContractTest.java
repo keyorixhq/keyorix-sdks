@@ -216,11 +216,25 @@ class ContractTest {
                 .filter(p -> p.getName().equals("default")).findFirst().orElseThrow();
         String machineToken = createMachineToken(token, defaultProject.getId());
         KeyorixClient machineClient = Keyorix.newClient(serverUrl, machineToken);
-        // A brand-new machine identity holds no roles, so this must authenticate (not
-        // AuthException) even though it can't yet be authorized for anything
-        // (ForbiddenException) -- proving the token is recognized as valid, distinct
-        // from being permitted.
-        assertThrows(ForbiddenException.class, machineClient::listProjects);
+        // A brand-new machine identity holds no grants, so since keyorix #2780
+        // GET /projects answers 200 with an empty list (not 403): the token is
+        // recognized as valid and simply sees nothing.
+        assertEquals(0, machineClient.listProjects().size());
+
+        // Proves the same token is authenticated but not authorized: a
+        // project-scoped read of the project it was minted in is 403.
+        HttpURLConnection conn = (HttpURLConnection) new URL(
+                serverUrl + "/api/v1/projects/" + defaultProject.getId()).openConnection();
+        conn.setRequestProperty("Authorization", "Bearer " + machineToken);
+        try {
+            assertEquals(403, conn.getResponseCode());
+        } finally {
+            conn.disconnect();
+        }
+
+        // A bad token must still be a 401, not an empty 200.
+        KeyorixClient badClient = Keyorix.newClient(serverUrl, "not-a-real-token");
+        assertThrows(AuthException.class, badClient::listProjects);
     }
 
     @Test

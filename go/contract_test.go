@@ -361,14 +361,42 @@ func TestContract_FullClientSurface(t *testing.T) {
 		if err != nil {
 			t.Fatalf("New: %v", err)
 		}
-		// A brand-new machine identity holds no roles, so this must
-		// authenticate (not AuthError) even though it can't yet be
-		// authorized for anything (ForbiddenError) -- proving the token is
-		// recognized as valid, distinct from being permitted.
-		_, err = machineClient.ListProjects(ctx)
-		var forbidden *ForbiddenError
-		if !errors.As(err, &forbidden) {
-			t.Errorf("ListProjects with a fresh machine token: got %T (%v), want *ForbiddenError", err, err)
+		// A brand-new machine identity holds no grants, so since keyorix
+		// #2780 GET /projects answers 200 with an empty list (not 403):
+		// the token is recognized as valid and simply sees nothing.
+		projects, err := machineClient.ListProjects(ctx)
+		if err != nil {
+			t.Fatalf("ListProjects with a fresh machine token: %v (want success with an empty list)", err)
+		}
+		if len(projects) != 0 {
+			t.Errorf("ListProjects with a fresh machine token: got %d projects, want 0", len(projects))
+		}
+
+		// Proves the same token is authenticated but not authorized: a
+		// project-scoped read of the project it was minted in is 403.
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, fmt.Sprintf("%s/api/v1/projects/%d", serverURL, defaultProjectID), nil)
+		if err != nil {
+			t.Fatalf("NewRequest: %v", err)
+		}
+		req.Header.Set("Authorization", "Bearer "+machineToken)
+		resp, err := http.DefaultClient.Do(req) //nolint:gosec // serverURL is the operator-supplied contract-test target, not attacker input
+		if err != nil {
+			t.Fatalf("GET /projects/%d: %v", defaultProjectID, err)
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusForbidden {
+			t.Errorf("GET /projects/%d with a fresh machine token: status %d, want 403", defaultProjectID, resp.StatusCode)
+		}
+
+		// A bad token must still be a 401, not an empty 200.
+		badClient, err := New(serverURL, "not-a-real-token")
+		if err != nil {
+			t.Fatalf("New: %v", err)
+		}
+		_, err = badClient.ListProjects(ctx)
+		var authErr *AuthError
+		if !errors.As(err, &authErr) {
+			t.Errorf("ListProjects with a bad token: got %T (%v), want *AuthError", err, err)
 		}
 	})
 
