@@ -14,8 +14,12 @@ fixture required (see .github/workflows/contract.yml).
 Skipped unless KEYORIX_CONTRACT_SERVER_URL is set.
 """
 
+import base64
+import hashlib
+import hmac
 import json
 import os
+import struct
 import time
 import unittest
 import urllib.error
@@ -110,6 +114,41 @@ def _create_machine_token(admin_token, project_id):
     if not token:
         raise RuntimeError("issue-machine-token response had no token")
     return token
+
+
+def _totp_code(base32_secret, at):
+    """RFC 6238 code (HMAC-SHA1, 6 digits, 30s step) for a base32 secret."""
+    secret = base32_secret.strip().replace(" ", "").upper()
+    key = base64.b32decode(secret + "=" * (-len(secret) % 8))
+    digest = hmac.new(key, struct.pack(">Q", int(at // 30)), hashlib.sha1).digest()
+    off = digest[-1] & 0x0F
+    return f"{(struct.unpack('>I', digest[off:off + 4])[0] & 0x7FFFFFFF) % 1000000:06d}"
+
+
+def _enrol_mfa_user(admin_token):
+    """Creates a fresh user via the admin session and enrols TOTP MFA for it
+    (raw HTTP: neither is part of this SDK's public surface). Returns
+    (username, password, base32 totp secret)."""
+    username = f"mfa-user-{time.time_ns()}"
+    password = "MfaUserPassw0rd!"
+    status, body = _post_json(
+        "/api/v1/users",
+        {"username": username, "email": f"{username}@example.com", "display_name": "MFA contract user", "password": password},
+        admin_token,
+    )
+    if status >= 300:
+        raise RuntimeError(f"POST /api/v1/users: unexpected status {status}: {body!r}")
+    user_token = keyorix.login(SERVER_URL, username, password)
+    status, body = _post_json("/api/v1/auth/mfa/enroll", {}, user_token)
+    if status >= 300:
+        raise RuntimeError(f"POST mfa/enroll: unexpected status {status}: {body!r}")
+    secret = json.loads(body)["data"]["secret"]
+    status, body = _post_json(
+        "/api/v1/auth/mfa/activate", {"code": _totp_code(secret, time.time()), "password": password}, user_token
+    )
+    if status >= 300:
+        raise RuntimeError(f"POST mfa/activate: unexpected status {status}: {body!r}")
+    return username, password, secret
 
 
 @unittest.skipUnless(SERVER_URL, "KEYORIX_CONTRACT_SERVER_URL not set -- skipping contract test (needs a real keyorix-server)")
@@ -208,6 +247,31 @@ class TestContractFullClientSurface(unittest.TestCase):
                 slow_client.list_projects()
         finally:
             httpd.shutdown()
+
+
+@unittest.skipUnless(SERVER_URL, "KEYORIX_CONTRACT_SERVER_URL not set -- skipping contract test (needs a real keyorix-server)")
+class TestContractMFALogin(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        if not BOOTSTRAP_TOKEN:
+            raise RuntimeError("KEYORIX_CONTRACT_BOOTSTRAP_TOKEN must be set alongside KEYORIX_CONTRACT_SERVER_URL")
+        admin_token = _seed_admin_session()
+        cls.username, cls.password, cls.secret = _enrol_mfa_user(admin_token)
+
+    def test_mfa_login_flow(self):
+        # One test, two password logins: the server's per-IP login budget is
+        # shared with the other SDKs' contract tests on the same server.
+        with self.assertRaises(keyorix.MFARequiredError) as cm:
+            keyorix.login(SERVER_URL, self.username, self.password)
+        self.assertTrue(cm.exception.challenge)
+        self.assertTrue(cm.exception.totp_available)
+        with self.assertRaises(keyorix.AuthError):
+            keyorix.verify_mfa(SERVER_URL, cm.exception.challenge, "000000")
+
+        # Next 30s step: the code used at activation is single-use.
+        code = _totp_code(self.secret, time.time() + 30)
+        token = keyorix.login(SERVER_URL, self.username, self.password, mfa_code=code)
+        self.assertTrue(keyorix.Client(SERVER_URL, token).health())
 
 
 if __name__ == "__main__":

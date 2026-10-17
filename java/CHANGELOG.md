@@ -2,6 +2,17 @@
 
 All notable changes to the Java SDK are documented here.
 
+## Unreleased
+
+### Added
+
+- `MFARequiredException`: `Keyorix.login` against an MFA-enabled account now
+  throws it (with `getChallenge()`, `isTotpAvailable()`,
+  `isWebauthnAvailable()`) instead of a generic `AuthException("No token in
+  login response")`. `Keyorix.login(url, user, pass, mfaCode)` performs the
+  second step for you; `Keyorix.verifyMfa(url, challenge, code)` does it
+  explicitly (`POST /auth/mfa/verify`, TOTP or recovery code).
+
 ## v0.3.0 (unreleased)
 
 ### Added

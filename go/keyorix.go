@@ -272,19 +272,53 @@ func New(serverURL, token string, opts ...Option) (*Client, error) {
 	return c, nil
 }
 
+// MFARequiredError is returned by Login when the password was correct but the
+// account needs a second factor. The server answers 200 with mfa_required=true
+// and a single-use challenge instead of a session; pass Challenge and the
+// user's TOTP (or recovery) code to VerifyMFA to obtain the session token.
+// TOTPAvailable and WebAuthnAvailable say which factors the account can
+// complete (VerifyMFA handles TOTP/recovery codes only).
+type MFARequiredError struct {
+	Challenge         string
+	TOTPAvailable     bool
+	WebAuthnAvailable bool
+}
+
+func (e *MFARequiredError) Error() string {
+	return "keyorix: multi-factor authentication required — call VerifyMFA with the challenge and a TOTP or recovery code"
+}
+
 // Login authenticates with username and password and returns a session token.
 // Use this to obtain a token programmatically instead of hardcoding one.
 // serverURL must use https:// (http:// is only accepted for localhost/loopback).
+//
+// For an account with MFA enabled it returns an *MFARequiredError carrying the
+// challenge; complete the login with VerifyMFA.
 func Login(ctx context.Context, serverURL, username, password string) (string, error) {
-	if err := validateServerURL(serverURL); err != nil {
-		return "", err
-	}
-	body, _ := json.Marshal(map[string]string{
+	return postLogin(ctx, serverURL, "/auth/login", map[string]string{
 		"username": username,
 		"password": password,
 	})
+}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, serverURL+"/auth/login", bytes.NewReader(body))
+// VerifyMFA completes a login that returned *MFARequiredError: it submits the
+// challenge together with a current TOTP code (or an unused recovery code) to
+// /auth/mfa/verify and returns the session token. A wrong or expired code is
+// an *AuthError (HTTP 401).
+func VerifyMFA(ctx context.Context, serverURL, challenge, code string) (string, error) {
+	return postLogin(ctx, serverURL, "/auth/mfa/verify", map[string]string{
+		"mfa_challenge": challenge,
+		"code":          code,
+	})
+}
+
+func postLogin(ctx context.Context, serverURL, path string, payload map[string]string) (string, error) {
+	if err := validateServerURL(serverURL); err != nil {
+		return "", err
+	}
+	body, _ := json.Marshal(payload)
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, serverURL+path, bytes.NewReader(body))
 	if err != nil {
 		return "", fmt.Errorf("keyorix: failed to create login request: %w", err)
 	}
@@ -303,11 +337,22 @@ func Login(ctx context.Context, serverURL, username, password string) (string, e
 
 	var result struct {
 		Data struct {
-			Token string `json:"token"`
+			Token             string `json:"token"`
+			MFARequired       bool   `json:"mfa_required"`
+			MFAChallenge      string `json:"mfa_challenge"`
+			TOTPAvailable     bool   `json:"totp_available"`
+			WebAuthnAvailable bool   `json:"webauthn_available"`
 		} `json:"data"`
 	}
 	if err := json.Unmarshal(respBody, &result); err != nil {
 		return "", fmt.Errorf("keyorix: failed to parse login response: %w", err)
+	}
+	if result.Data.MFARequired {
+		return "", &MFARequiredError{
+			Challenge:         result.Data.MFAChallenge,
+			TOTPAvailable:     result.Data.TOTPAvailable,
+			WebAuthnAvailable: result.Data.WebAuthnAvailable,
+		}
 	}
 	if result.Data.Token == "" {
 		return "", fmt.Errorf("keyorix: no token in login response")

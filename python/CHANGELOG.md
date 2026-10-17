@@ -2,6 +2,16 @@
 
 All notable changes to the Python SDK are documented here.
 
+## Unreleased
+
+### Added
+
+- `MFARequiredError`: `login()` against an MFA-enabled account now raises it
+  (with `challenge`, `totp_available`, `webauthn_available`) instead of a
+  generic `AuthError("No token in login response")`. `login(..., mfa_code=...)`
+  performs the second step for you; `verify_mfa(server_url, challenge, code)`
+  does it explicitly (`POST /auth/mfa/verify`, TOTP or recovery code).
+
 ## v0.3.0 (unreleased)
 
 ### Added

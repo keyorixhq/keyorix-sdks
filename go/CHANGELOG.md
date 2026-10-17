@@ -2,6 +2,17 @@
 
 All notable changes to the Go SDK are documented here.
 
+## Unreleased
+
+### Added
+
+- `*MFARequiredError`: `Login` against an MFA-enabled account now returns it
+  (carrying `Challenge`, `TOTPAvailable`, `WebAuthnAvailable`) instead of the
+  misleading `keyorix: no token in login response`. New
+  `VerifyMFA(ctx, serverURL, challenge, code)` completes the login via
+  `POST /auth/mfa/verify` with a TOTP or recovery code. Needs a server with
+  `/auth/mfa/verify` (see COMPATIBILITY.md).
+
 ## v0.3.0 — 2026-10-02
 
 ### Added

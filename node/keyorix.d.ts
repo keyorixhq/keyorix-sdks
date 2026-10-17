@@ -31,6 +31,12 @@ export declare class KeyorixError extends Error {
 export declare class AuthError extends KeyorixError {}
 export declare class ForbiddenError extends KeyorixError {}
 export declare class NotFoundError extends KeyorixError {}
+export declare class MFARequiredError extends KeyorixError {
+  /** Single-use token to pass to verifyMfa() with a TOTP or recovery code. */
+  challenge: string;
+  totpAvailable: boolean;
+  webauthnAvailable: boolean;
+}
 export declare class SecretNotFoundError extends KeyorixError {}
 export declare class AmbiguousSecretError extends KeyorixError {
   ids: number[];
@@ -40,6 +46,13 @@ export declare function login(
   serverUrl: string,
   username: string,
   password: string,
+  timeoutOrOpts?: number | { timeout?: number; mfaCode?: string }
+): Promise<string>;
+
+export declare function verifyMfa(
+  serverUrl: string,
+  challenge: string,
+  code: string,
   timeout?: number
 ): Promise<string>;
 

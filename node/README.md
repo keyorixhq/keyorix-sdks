@@ -52,7 +52,10 @@ Zero external dependencies. Uses Node.js built-in http/https modules.
   user's password.
 - keyorix.login(serverUrl, username, password) -> Promise<string> —
   authenticates with a human's username/password. For interactive use, not
-  for an application's long-running credential.
+  for an application's long-running credential. For an account with MFA it
+  rejects with `MFARequiredError` (`.challenge`); pass `{ mfaCode: '123456' }`
+  as the 4th argument, or call `keyorix.verifyMfa(serverUrl, e.challenge, code)`,
+  to finish.
 - client.getSecretIn(project, environment, name) -> Promise<string> — a
   single server-authorized round trip
   (`GET /api/v1/secrets/value?ref=project/environment/name`). Needs no

@@ -2,6 +2,16 @@
 
 All notable changes to the Node.js SDK are documented here.
 
+## Unreleased
+
+### Added
+
+- `MFARequiredError`: `login()` against an MFA-enabled account now rejects with
+  it (with `challenge`, `totpAvailable`, `webauthnAvailable`) instead of a
+  generic `AuthError('No token in login response')`. `login(..., { mfaCode })`
+  performs the second step for you; `verifyMfa(serverUrl, challenge, code)`
+  does it explicitly (`POST /auth/mfa/verify`, TOTP or recovery code).
+
 ## v0.3.0 (unreleased)
 
 ### Added

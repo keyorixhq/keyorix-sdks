@@ -19,6 +19,7 @@ import java.time.Duration;
 public final class Keyorix {
 
     private static final String LOGIN_PATH = "/auth/login";
+    private static final String MFA_VERIFY_PATH = "/auth/mfa/verify";
 
     private Keyorix() {}
 
@@ -38,11 +39,50 @@ public final class Keyorix {
 
     /**
      * Authenticates with the Keyorix server and returns a session token.
+     *
+     * @throws MFARequiredException if the account has MFA enabled; complete the
+     *                              login with {@link #verifyMfa}
      */
     public static String login(String serverUrl, String username, String password, Duration timeout) throws KeyorixException {
+        return postLogin(serverUrl, LOGIN_PATH,
+                "{\"username\":\"" + escape(username) + "\",\"password\":\"" + escape(password) + "\"}", timeout);
+    }
+
+    /**
+     * Authenticates and, when the account has MFA enabled, completes the second
+     * step with {@code mfaCode} (a current TOTP code or an unused recovery code).
+     * Accounts without MFA ignore {@code mfaCode}.
+     *
+     * @throws AuthException if the password or the code is wrong
+     */
+    public static String login(String serverUrl, String username, String password, String mfaCode) throws KeyorixException {
+        try {
+            return login(serverUrl, username, password, Duration.ofSeconds(30));
+        } catch (MFARequiredException e) {
+            return verifyMfa(serverUrl, e.getChallenge(), mfaCode);
+        }
+    }
+
+    /**
+     * Completes a login that threw {@link MFARequiredException} and returns the
+     * session token.
+     *
+     * @param challenge {@link MFARequiredException#getChallenge()} (single use)
+     * @param code      current TOTP code, or an unused recovery code
+     * @throws AuthException if the code or challenge is wrong or expired
+     */
+    public static String verifyMfa(String serverUrl, String challenge, String code) throws KeyorixException {
+        return verifyMfa(serverUrl, challenge, code, Duration.ofSeconds(30));
+    }
+
+    public static String verifyMfa(String serverUrl, String challenge, String code, Duration timeout) throws KeyorixException {
+        return postLogin(serverUrl, MFA_VERIFY_PATH,
+                "{\"mfa_challenge\":\"" + escape(challenge) + "\",\"code\":\"" + escape(code) + "\"}", timeout);
+    }
+
+    private static String postLogin(String serverUrl, String path, String body, Duration timeout) throws KeyorixException {
         KeyorixClient.validateServerUrl(serverUrl);
-        String url = serverUrl.replaceAll("/$", "") + LOGIN_PATH;
-        String body = "{\"username\":\"" + escape(username) + "\",\"password\":\"" + escape(password) + "\"}";
+        String url = serverUrl.replaceAll("/$", "") + path;
 
         try {
             HttpURLConnection conn = (HttpURLConnection) new URL(url).openConnection();
@@ -63,6 +103,12 @@ public final class Keyorix {
 
             if (status != 200) {
                 throw new AuthException("Login failed (HTTP " + status + ")", status, response);
+            }
+
+            if (JsonParser.extractBoolean(response, "mfa_required")) {
+                throw new MFARequiredException(JsonParser.extractString(response, "mfa_challenge"),
+                        JsonParser.extractBoolean(response, "totp_available"),
+                        JsonParser.extractBoolean(response, "webauthn_available"));
             }
 
             String token = JsonParser.parseToken(response);

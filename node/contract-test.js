@@ -22,7 +22,8 @@
 // Skipped unless KEYORIX_CONTRACT_SERVER_URL is set.
 
 const http = require('node:http');
-const { Client, login, ForbiddenError } = require('./keyorix');
+const crypto = require('node:crypto');
+const { Client, login, verifyMfa, ForbiddenError, AuthError, MFARequiredError } = require('./keyorix');
 
 let passed = 0;
 let failed = 0;
@@ -124,6 +125,47 @@ async function createMachineToken(serverUrl, adminToken, projectId) {
   return token;
 }
 
+// RFC 6238 code (HMAC-SHA1, 6 digits, 30s step) for a base32 secret.
+function totpCode(base32Secret, atMs) {
+  const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
+  let bits = '';
+  for (const ch of base32Secret.replace(/[\s=]/g, '').toUpperCase()) bits += alphabet.indexOf(ch).toString(2).padStart(5, '0');
+  const bytes = [];
+  for (let i = 0; i + 8 <= bits.length; i += 8) bytes.push(parseInt(bits.slice(i, i + 8), 2));
+  const counter = Buffer.alloc(8);
+  counter.writeBigUInt64BE(BigInt(Math.floor(atMs / 1000 / 30)));
+  const mac = crypto.createHmac('sha1', Buffer.from(bytes)).update(counter).digest();
+  const off = mac[mac.length - 1] & 0x0f;
+  const bin = mac.readUInt32BE(off) & 0x7fffffff;
+  return String(bin % 1000000).padStart(6, '0');
+}
+
+// Creates a fresh user via the admin session and enrols TOTP MFA for it (raw
+// HTTP: neither is part of this SDK's public surface).
+async function enrolMfaUser(serverUrl, adminToken) {
+  const username = `mfa-user-${Date.now()}`;
+  const password = 'MfaUserPassw0rd!';
+  const created = await postJSON(
+    serverUrl,
+    '/api/v1/users',
+    { username, email: `${username}@example.com`, display_name: 'MFA contract user', password },
+    adminToken
+  );
+  if (created.statusCode >= 300) throw new Error(`POST /api/v1/users: unexpected status ${created.statusCode}: ${created.body}`);
+  const userToken = await login(serverUrl, username, password);
+  const enrol = await postJSON(serverUrl, '/api/v1/auth/mfa/enroll', {}, userToken);
+  if (enrol.statusCode >= 300) throw new Error(`POST mfa/enroll: unexpected status ${enrol.statusCode}: ${enrol.body}`);
+  const secret = JSON.parse(enrol.body).data.secret;
+  const activate = await postJSON(
+    serverUrl,
+    '/api/v1/auth/mfa/activate',
+    { code: totpCode(secret, Date.now()), password },
+    userToken
+  );
+  if (activate.statusCode >= 300) throw new Error(`POST mfa/activate: unexpected status ${activate.statusCode}: ${activate.body}`);
+  return { username, password, secret };
+}
+
 async function runContractTests() {
   const serverUrl = process.env.KEYORIX_CONTRACT_SERVER_URL;
   if (!serverUrl) {
@@ -195,6 +237,33 @@ async function runContractTests() {
     // from being permitted.
     assert(e instanceof ForbiddenError, `Client works transparently with a machine identity token — got ${e.constructor.name}, want ForbiddenError`);
   }
+
+  // MFA login: a password-only login against an MFA-enrolled account must
+  // reject with a typed MFARequiredError carrying the challenge, not a generic
+  // "no token" AuthError.
+  const mfaUser = await enrolMfaUser(serverUrl, token);
+  const isMfaRequired = (e) => typeof MFARequiredError === 'function' && e instanceof MFARequiredError;
+  let mfaErr;
+  try {
+    await login(serverUrl, mfaUser.username, mfaUser.password);
+  } catch (e) {
+    mfaErr = e;
+  }
+  assert(isMfaRequired(mfaErr), `login() for an MFA-enrolled account rejects with MFARequiredError — got ${mfaErr && mfaErr.constructor.name}: ${mfaErr && mfaErr.message}`);
+  assert(isMfaRequired(mfaErr) && !!mfaErr.challenge && mfaErr.totpAvailable === true, 'MFARequiredError carries the challenge and totpAvailable');
+  if (isMfaRequired(mfaErr)) {
+    try {
+      await verifyMfa(serverUrl, mfaErr.challenge, '000000');
+      assert(false, 'verifyMfa() with a wrong code should reject');
+    } catch (e) {
+      assert(typeof AuthError === 'function' && e instanceof AuthError, `verifyMfa() with a wrong code rejects with AuthError — got ${e.constructor.name}`);
+    }
+  }
+  // Next 30s step: the code used at activation is single-use.
+  const mfaToken = await login(serverUrl, mfaUser.username, mfaUser.password, {
+    mfaCode: totpCode(mfaUser.secret, Date.now() + 30000),
+  }).catch((e) => e);
+  assert(typeof mfaToken === 'string' && (await new Client(serverUrl, mfaToken).health()) === true, `login(..., { mfaCode }) returns a working token — got ${typeof mfaToken === 'string' ? 'token' : mfaToken && mfaToken.message}`);
 
   const slowServer = http.createServer((req, res) => {
     setTimeout(() => {
