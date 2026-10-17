@@ -87,8 +87,11 @@ server — use `get_secret_scoped`/`list_secrets_scoped` instead.
 ## Exceptions
 
 - KeyorixError — base
-- AuthError — authentication failure
-- SecretNotFoundError — secret not found
+- AuthError — authentication failure (HTTP 401)
+- ForbiddenError — token authenticated but not permitted (HTTP 403)
+- NotFoundError — resource not found (HTTP 404), which is what
+  `get_secret_in`/`get_secret_by_ref` raise for a missing secret, project or environment
+- SecretNotFoundError — raised by `get_secret_scoped` when no secret in the scope has that name
 - AmbiguousSecretError — secret name matched more than one secret in scope (`.ids`)
 
 ## Requirements

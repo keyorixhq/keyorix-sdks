@@ -141,9 +141,21 @@ if err != nil {
 }
 ```
 
+## Errors
+
+Test with `errors.As`:
+
+- `*keyorix.AuthError` — authentication failure (HTTP 401)
+- `*keyorix.ForbiddenError` — token authenticated but not permitted (HTTP 403)
+- `*keyorix.NotFoundError` — resource not found (HTTP 404); this is what
+  `GetSecretIn`/`GetSecretByRef` return for a missing secret, project or environment
+- `*keyorix.SecretNotFoundError` — returned by `GetSecretScoped` when no secret in the scope has that name
+- `*keyorix.AmbiguousSecretError` — the name matched more than one secret in scope
+- `*keyorix.APIError` — any other non-2xx response (the 401/403/404 types above unwrap to it)
+
 ## Requirements
 
-- Go 1.21+
+- Go 1.26.2+ (the `go` directive in `go.mod`)
 - Keyorix server v0.1.0+
 
 ## Compatibility
