@@ -10,8 +10,14 @@ public class Secret {
     private final String environment;
     private final long projectId;
     private final String createdAt;
+    private final String purgeAt;
 
     public Secret(long id, String name, String type, String environment, long projectId, String createdAt) {
+        this(id, name, type, environment, projectId, createdAt, "");
+    }
+
+    public Secret(long id, String name, String type, String environment, long projectId, String createdAt, String purgeAt) {
+        this.purgeAt = purgeAt;
         this.id = id;
         this.name = name;
         this.type = type;
@@ -26,6 +32,12 @@ public class Secret {
     public String getEnvironment() { return environment; }
     public long getProjectId()   { return projectId; }
     public String getCreatedAt() { return createdAt; }
+
+    /**
+     * Restore deadline of a soft-deleted secret (RFC 3339, UTC) as returned by
+     * {@link KeyorixClient#listDeletedSecrets}; empty for a live secret.
+     */
+    public String getPurgeAt()   { return purgeAt; }
 
     @Override
     public String toString() {

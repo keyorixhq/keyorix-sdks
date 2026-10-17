@@ -17,6 +17,9 @@ All notable changes to the Go SDK are documented here.
 - Contract test: a fresh machine-identity token now expects `ListProjects` to
   succeed with an empty list (keyorix #2780) and `GET /projects/{id}` to be
   403; a bad token still gives `*AuthError`.
+- `Secret.PurgeAt` (`*time.Time`) and `Client.ListDeletedSecrets(ctx, project)`
+  (`GET /api/v1/projects/{id}/secrets/deleted`): the restore deadline of a
+  soft-deleted secret. Needs server v0.96.0+.
 
 ## v0.3.0 — 2026-10-02
 

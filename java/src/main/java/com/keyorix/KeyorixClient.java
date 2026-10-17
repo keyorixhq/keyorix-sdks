@@ -275,6 +275,20 @@ public class KeyorixClient {
     }
 
     /**
+     * Lists a project's soft-deleted (restorable) secrets, newest deleted
+     * first. Each has {@link Secret#getPurgeAt()} set: the instant before
+     * which the server will not hard-delete it (the restore deadline).
+     * Requires secrets.read at the project scope; the server caps the list
+     * at 500.
+     *
+     * @throws KeyorixException if an API error occurs
+     */
+    public List<Secret> listDeletedSecrets(long projectId) throws KeyorixException {
+        return JsonParser.parseDeletedSecretList(
+            get("/api/v1/projects/" + projectId + "/secrets/deleted?limit=500"), projectId);
+    }
+
+    /**
      * Returns the value of secret {@code name} within {@code project}/
      * {@code environment}, all by name, via a single server-authorized
      * round trip — a thin wrapper around {@link #getSecretByRef(String)}.

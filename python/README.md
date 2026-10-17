@@ -72,6 +72,9 @@ Zero dependencies — stdlib only. Or just copy keyorix.py into your project.
   project/environment-list permission to do so.
 - client.list_secrets_scoped(project, environment) -> list — follows every
   page the server reports.
+- client.list_deleted_secrets(project) -> list — the project's soft-deleted
+  secrets; `purge_at` is the restore deadline (RFC 3339 UTC; empty on live
+  secrets). Needs server v0.96.0+.
 - client.health() -> bool
 
 `project`/`environment` each accept either a name (`str`, resolved to an ID via

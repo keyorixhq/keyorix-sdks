@@ -86,6 +86,9 @@ String dbPassword = client.getSecretIn("my-project", "production", "db-password"
   project/environment-list permission to do so.
 - client.listSecretsScoped(project, environment) -> List<Secret> —
   follows every page the server reports.
+- client.listDeletedSecrets(projectId) -> List<Secret> — the project's
+  soft-deleted secrets; `secret.getPurgeAt()` is the restore deadline (RFC 3339
+  UTC; empty on live secrets). Needs server v0.96.0+.
 - client.health() -> boolean
 
 `project`/`environment` each have two overloads: by name (`String`, resolved to
