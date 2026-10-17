@@ -99,6 +99,15 @@ class ContractTest {
         return status;
     }
 
+    private static int getStatus(String url, String bearerToken) throws IOException {
+        HttpURLConnection conn = (HttpURLConnection) new URL(url).openConnection();
+        conn.setRequestMethod("GET");
+        conn.setRequestProperty("Authorization", "Bearer " + bearerToken);
+        int status = conn.getResponseCode();
+        conn.disconnect();
+        return status;
+    }
+
     /** Mints a personal access token for the caller identified by adminToken, via raw
      * HTTP (PAT issuance is not part of this SDK's public surface). */
     private static String createPAT(String adminToken, String name) throws IOException {
@@ -211,16 +220,31 @@ class ContractTest {
     }
 
     @Test
-    void machineTokenAuthWorksTransparently() throws Exception {
+    void listProjectsSucceedsWithEmptyListForZeroGrantToken() throws Exception {
         Project defaultProject = client.listProjects().stream()
                 .filter(p -> p.getName().equals("default")).findFirst().orElseThrow();
         String machineToken = createMachineToken(token, defaultProject.getId());
         KeyorixClient machineClient = Keyorix.newClient(serverUrl, machineToken);
-        // A brand-new machine identity holds no roles, so this must authenticate (not
-        // AuthException) even though it can't yet be authorized for anything
-        // (ForbiddenException) -- proving the token is recognized as valid, distinct
-        // from being permitted.
-        assertThrows(ForbiddenException.class, machineClient::listProjects);
+        // A brand-new machine identity holds no roles. List routes are filtered by
+        // permission, so it authenticates and gets an EMPTY 200 (not AuthException,
+        // not ForbiddenException).
+        assertTrue(machineClient.listProjects().isEmpty(),
+            "expected an empty project list for a zero-grant token");
+    }
+
+    @Test
+    void getProjectWithZeroGrantTokenIsForbidden() throws Exception {
+        Project defaultProject = client.listProjects().stream()
+                .filter(p -> p.getName().equals("default")).findFirst().orElseThrow();
+        String machineToken = createMachineToken(token, defaultProject.getId());
+        assertEquals(403, getStatus(serverUrl + "/api/v1/projects/" + defaultProject.getId(), machineToken),
+            "GET /projects/{id} with a zero-grant token must be forbidden (403)");
+    }
+
+    @Test
+    void listProjectsWithBadTokenIsUnauthorized() throws Exception {
+        KeyorixClient badClient = Keyorix.newClient(serverUrl, "not-a-valid-token");
+        assertThrows(AuthException.class, badClient::listProjects);
     }
 
     @Test
