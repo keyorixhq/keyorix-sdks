@@ -52,7 +52,10 @@ Zero external dependencies. Uses Node.js built-in http/https modules.
   user's password.
 - keyorix.login(serverUrl, username, password) -> Promise<string> —
   authenticates with a human's username/password. For interactive use, not
-  for an application's long-running credential.
+  for an application's long-running credential. For an account with MFA it
+  rejects with `MFARequiredError` (`.challenge`); pass `{ mfaCode: '123456' }`
+  as the 4th argument, or call `keyorix.verifyMfa(serverUrl, e.challenge, code)`,
+  to finish.
 - client.getSecretIn(project, environment, name) -> Promise<string> — a
   single server-authorized round trip
   (`GET /api/v1/secrets/value?ref=project/environment/name`). Needs no
@@ -67,6 +70,9 @@ Zero external dependencies. Uses Node.js built-in http/https modules.
   project/environment-list permission to do so.
 - client.listSecretsScoped(project, environment) -> Promise<Secret[]> —
   follows every page the server reports.
+- client.listDeletedSecrets(project) -> Promise<Secret[]> — the project's
+  soft-deleted secrets; `purgeAt` is the restore deadline (RFC 3339 UTC; absent
+  on live secrets). Needs server v0.96.0+.
 - client.health() -> Promise<boolean>
 
 `project`/`environment` each accept either a name (`string`, resolved to an ID

@@ -52,7 +52,9 @@ Zero dependencies — stdlib only. Or just copy keyorix.py into your project.
   token over a user's password.
 - keyorix.login(server_url, username, password) -> str — authenticates
   with a human's username/password. For interactive use, not for an
-  application's long-running credential.
+  application's long-running credential. For an account with MFA it raises
+  `MFARequiredError` (`.challenge`); pass `mfa_code="123456"` to `login()`, or
+  call `keyorix.verify_mfa(server_url, e.challenge, code)`, to finish.
 - client.get_secret_in(project, environment, name) -> str — a single
   server-authorized round trip
   (`GET /api/v1/secrets/value?ref=project/environment/name`). Needs no
@@ -67,6 +69,9 @@ Zero dependencies — stdlib only. Or just copy keyorix.py into your project.
   project/environment-list permission to do so.
 - client.list_secrets_scoped(project, environment) -> list — follows every
   page the server reports.
+- client.list_deleted_secrets(project) -> list — the project's soft-deleted
+  secrets; `purge_at` is the restore deadline (RFC 3339 UTC; empty on live
+  secrets). Needs server v0.96.0+.
 - client.health() -> bool
 
 `project`/`environment` each accept either a name (`str`, resolved to an ID via

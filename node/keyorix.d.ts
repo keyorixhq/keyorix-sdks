@@ -5,6 +5,8 @@ export interface Secret {
   projectId: number;
   environment: string;
   createdAt: string;
+  /** Restore deadline (RFC 3339 UTC) of a soft-deleted secret; set by listDeletedSecrets. */
+  purgeAt?: string;
 }
 
 export interface Project {
@@ -31,6 +33,12 @@ export declare class KeyorixError extends Error {
 export declare class AuthError extends KeyorixError {}
 export declare class ForbiddenError extends KeyorixError {}
 export declare class NotFoundError extends KeyorixError {}
+export declare class MFARequiredError extends KeyorixError {
+  /** Single-use token to pass to verifyMfa() with a TOTP or recovery code. */
+  challenge: string;
+  totpAvailable: boolean;
+  webauthnAvailable: boolean;
+}
 export declare class SecretNotFoundError extends KeyorixError {}
 export declare class AmbiguousSecretError extends KeyorixError {
   ids: number[];
@@ -40,6 +48,13 @@ export declare function login(
   serverUrl: string,
   username: string,
   password: string,
+  timeoutOrOpts?: number | { timeout?: number; mfaCode?: string }
+): Promise<string>;
+
+export declare function verifyMfa(
+  serverUrl: string,
+  challenge: string,
+  code: string,
   timeout?: number
 ): Promise<string>;
 
@@ -51,6 +66,7 @@ export declare class Client {
   /** @deprecated Removed in v0.3.0 — always throws. Use getSecretScoped. */
   getSecret(name: string, environment?: string): Promise<string>;
   listSecretsScoped(project: string | number, environment: string | number): Promise<Secret[]>;
+  listDeletedSecrets(project: string | number): Promise<Secret[]>;
   getSecretScoped(name: string, project: string | number, environment: string | number): Promise<string>;
   getSecretIn(project: string, environment: string, name: string): Promise<string>;
   getSecretByRef(ref: string): Promise<string>;

@@ -81,6 +81,12 @@ Authenticates with a human's username/password and returns a session token.
 For interactive use (a developer at a terminal, the CLI's own login flow) —
 not for an application's long-running credential.
 
+If the account has MFA enabled, `Login` returns a `*keyorix.MFARequiredError`
+(`errors.As`) whose `Challenge` you pass, with the user's current TOTP (or an
+unused recovery code), to `keyorix.VerifyMFA(ctx, serverURL, challenge, code)`
+to get the session token. `TOTPAvailable`/`WebAuthnAvailable` say which
+factors the account has; passkeys are not supported by this SDK.
+
 ### `client.GetSecretIn(ctx, project, environment, name string) (string, error)`
 Returns the plaintext value of secret `name` in `project`/`environment`
 (all by name), via a single server-authorized round trip
@@ -100,6 +106,12 @@ matching ID) — it never guesses. Prefer `GetSecretIn` unless you already have 
 want to cache) project/environment IDs: `GetSecretScoped` costs up to two extra
 round trips to resolve a name-based `ProjectRef`/`EnvironmentRef` the first time,
 and needs project/environment-list permission to do so.
+
+### `client.ListDeletedSecrets(ctx, project ProjectRef) ([]Secret, error)`
+Lists a project's soft-deleted (recycle-bin) secrets, newest deleted first.
+Each has `PurgeAt` (`*time.Time`) set: the restore deadline, before which the
+server will not hard-delete it. `PurgeAt` is nil on live secrets. Needs server
+v0.96.0+.
 
 ### `client.ListSecretsScoped(ctx, project ProjectRef, environment EnvironmentRef) ([]Secret, error)`
 Returns every secret within one project's environment, following every page

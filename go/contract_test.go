@@ -3,12 +3,17 @@ package keyorix
 import (
 	"bytes"
 	"context"
+	"crypto/hmac"
+	"crypto/sha1" //nolint:gosec // RFC 6238 TOTP is defined over HMAC-SHA1
+	"encoding/base32"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strings"
 	"testing"
 	"time"
 )
@@ -388,4 +393,204 @@ func TestContract_FullClientSurface(t *testing.T) {
 	})
 
 	_ = createdProjectID // exercised for its assertions above; no further use
+}
+
+// authedJSON performs an authenticated JSON request over raw HTTP (user
+// administration, MFA enrolment and secret deletion are not part of this SDK's
+// public surface) and decodes the response envelope's `data` into out (when
+// non-nil). Any status >= 300 fails the test.
+func authedJSON(t *testing.T, method, url, token string, in, out any) {
+	t.Helper()
+	var rdr *bytes.Reader
+	if in != nil {
+		b, _ := json.Marshal(in)
+		rdr = bytes.NewReader(b)
+	} else {
+		rdr = bytes.NewReader(nil)
+	}
+	req, err := http.NewRequest(method, url, rdr) //nolint:gosec // url is the operator-supplied contract-test target, not attacker input
+	if err != nil {
+		t.Fatalf("build %s %s: %v", method, url, err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", authBearer+token)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("%s %s: %v", method, url, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		t.Fatalf("%s %s: unexpected status %d", method, url, resp.StatusCode)
+	}
+	if out != nil {
+		var env struct {
+			Data json.RawMessage `json:"data"`
+		}
+		if err := json.NewDecoder(resp.Body).Decode(&env); err != nil {
+			t.Fatalf("decode %s %s: %v", method, url, err)
+		}
+		if err := json.Unmarshal(env.Data, out); err != nil {
+			t.Fatalf("decode data of %s %s: %v", method, url, err)
+		}
+	}
+}
+
+// totpCode computes the RFC 6238 code (SHA-1, 6 digits, 30s step) for a base32
+// secret, as the server's authenticator-app flow does.
+func totpCode(t *testing.T, base32Secret string, at time.Time) string {
+	t.Helper()
+	key, err := base32.StdEncoding.WithPadding(base32.NoPadding).DecodeString(strings.ToUpper(strings.TrimRight(base32Secret, "=")))
+	if err != nil {
+		t.Fatalf("decode TOTP secret: %v", err)
+	}
+	var msg [8]byte
+	binary.BigEndian.PutUint64(msg[:], uint64(at.Unix()/30)) //nolint:gosec // time is positive
+	mac := hmac.New(sha1.New, key)                           //nolint:gosec // RFC 6238 mandates HMAC-SHA1
+	mac.Write(msg[:])
+	sum := mac.Sum(nil)
+	off := sum[len(sum)-1] & 0x0f
+	bin := binary.BigEndian.Uint32(sum[off:off+4]) & 0x7fffffff
+	return fmt.Sprintf("%06d", bin%1000000)
+}
+
+// enrolMFAUser creates a fresh user via the admin session and enrols TOTP MFA
+// for it, returning the credentials and the base32 TOTP secret.
+func enrolMFAUser(t *testing.T, serverURL, adminToken string) (username, password, totpSecret string) {
+	t.Helper()
+	username = fmt.Sprintf("mfa-user-%d", time.Now().UnixNano())
+	password = "MfaUserPassw0rd!"
+	authedJSON(t, http.MethodPost, serverURL+"/api/v1/users", adminToken, map[string]any{
+		"username": username, "email": username + "@example.com", "display_name": "MFA contract user", "password": password,
+	}, nil)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	userToken, err := Login(ctx, serverURL, username, password)
+	if err != nil {
+		t.Fatalf("Login as freshly created user: %v", err)
+	}
+	var enrol struct {
+		Secret string `json:"secret"`
+	}
+	authedJSON(t, http.MethodPost, serverURL+"/api/v1/auth/mfa/enroll", userToken, nil, &enrol)
+	authedJSON(t, http.MethodPost, serverURL+"/api/v1/auth/mfa/activate", userToken, map[string]any{
+		"code": totpCode(t, enrol.Secret, time.Now()), "password": password,
+	}, nil)
+	return username, password, enrol.Secret
+}
+
+func TestContract_MFALogin(t *testing.T) {
+	serverURL := contractServerURL(t)
+	adminToken := seedAdminSession(t, serverURL)
+	username, password, totpSecret := enrolMFAUser(t, serverURL, adminToken)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	_, err := Login(ctx, serverURL, username, password)
+	var mfa *MFARequiredError
+	if !errors.As(err, &mfa) {
+		t.Fatalf("Login for an MFA-enrolled account: got %T (%v), want *MFARequiredError", err, err)
+	}
+	if mfa.Challenge == "" {
+		t.Error("MFARequiredError.Challenge is empty")
+	}
+	if !mfa.TOTPAvailable {
+		t.Error("MFARequiredError.TOTPAvailable = false for a TOTP-enrolled account")
+	}
+
+	// A wrong code is an authentication failure, not a token.
+	var authErr *AuthError
+	if _, err := VerifyMFA(ctx, serverURL, mfa.Challenge, "000000"); !errors.As(err, &authErr) {
+		t.Errorf("VerifyMFA with a wrong code: got %T (%v), want *AuthError", err, err)
+	}
+
+	// The wrong attempt may have consumed the challenge: take a fresh one.
+	_, err = Login(ctx, serverURL, username, password)
+	if !errors.As(err, &mfa) {
+		t.Fatalf("second Login: got %T (%v), want *MFARequiredError", err, err)
+	}
+	token, err := VerifyMFA(ctx, serverURL, mfa.Challenge, totpCode(t, totpSecret, time.Now().Add(30*time.Second))) // next step: the activation code is single-use
+	if err != nil {
+		t.Fatalf("VerifyMFA with a valid code: %v", err)
+	}
+	client, err := New(serverURL, token)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if err := client.Health(ctx); err != nil {
+		t.Errorf("Health with the MFA-obtained token: %v", err)
+	}
+}
+
+func TestContract_DeletedSecretPurgeAt(t *testing.T) {
+	serverURL := contractServerURL(t)
+	token := seedAdminSession(t, serverURL)
+	client, err := New(serverURL, token)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	projects, err := client.ListProjects(ctx)
+	if err != nil {
+		t.Fatalf("ListProjects: %v", err)
+	}
+	var projectID uint
+	for _, p := range projects {
+		if p.Name == "default" {
+			projectID = p.ID
+		}
+	}
+	envs, err := client.ListEnvironments(ctx, projectID)
+	if err != nil {
+		t.Fatalf("ListEnvironments: %v", err)
+	}
+	var devEnvID uint
+	for _, e := range envs {
+		if e.Name == "development" {
+			devEnvID = e.ID
+		}
+	}
+	if projectID == 0 || devEnvID == 0 {
+		t.Fatal("default project / development environment not found")
+	}
+
+	name := fmt.Sprintf("contract-purge-%d", time.Now().UnixNano())
+	seedSecret(t, serverURL, token, projectID, devEnvID, name, "v")
+	live, err := client.ListSecretsScoped(ctx, ProjectByID(projectID), EnvironmentByID(devEnvID))
+	if err != nil {
+		t.Fatalf("ListSecretsScoped: %v", err)
+	}
+	var id uint
+	for _, s := range live {
+		if s.Name == name {
+			id = s.ID
+			if s.PurgeAt != nil {
+				t.Errorf("live secret has PurgeAt %v, want nil", s.PurgeAt)
+			}
+		}
+	}
+	if id == 0 {
+		t.Fatalf("seeded secret %q not found", name)
+	}
+	authedJSON(t, http.MethodDelete, fmt.Sprintf("%s/api/v1/secrets/%d", serverURL, id), token, nil, nil)
+
+	deleted, err := client.ListDeletedSecrets(ctx, ProjectByID(projectID))
+	if err != nil {
+		t.Fatalf("ListDeletedSecrets: %v", err)
+	}
+	for _, s := range deleted {
+		if s.ID != id {
+			continue
+		}
+		if s.PurgeAt == nil {
+			t.Fatal("soft-deleted secret has nil PurgeAt")
+		}
+		if d := time.Until(*s.PurgeAt); d < 29*24*time.Hour || d > 31*24*time.Hour {
+			t.Errorf("PurgeAt %v is not ~30 days out (retention_days=30)", s.PurgeAt)
+		}
+		return
+	}
+	t.Fatalf("soft-deleted secret %d not in ListDeletedSecrets (%d entries)", id, len(deleted))
 }

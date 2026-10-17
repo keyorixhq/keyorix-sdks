@@ -32,6 +32,25 @@ class JsonParser {
         return result;
     }
 
+    /** Parse the recycle bin from: {"data":{"deleted":[...]}}; purge_at becomes {@link Secret#getPurgeAt()}. */
+    static List<Secret> parseDeletedSecretList(String json, long projectId) {
+        List<String> objects = extractArrayObjects(json, "deleted");
+        List<Secret> result = new ArrayList<>();
+        for (String obj : objects) {
+            try {
+                String name = extractString(obj, "name");
+                if (name == null) continue;
+                String type = extractString(obj, "type");
+                String purgeAt = extractString(obj, "purge_at");
+                result.add(new Secret(parseLong(obj, "id"), name, type != null ? type : "", "", projectId, "",
+                                      purgeAt != null ? purgeAt : ""));
+            } catch (Exception e) {
+                // skip an unparseable entry, as parseSecretList does
+            }
+        }
+        return result;
+    }
+
     /** Extract total_pages from a paginated list response: {"data":{...,"total_pages":N}} */
     static int parseTotalPages(String json) {
         return (int) parseLong(json, "total_pages");
@@ -129,6 +148,18 @@ class JsonParser {
             end++;
         }
         return json.substring(start + 1, end);
+    }
+
+    /** True only when {@code key} is present with the literal value {@code true}. */
+    static boolean extractBoolean(String json, String key) {
+        String search = "\"" + key + "\"";
+        int idx = json.indexOf(search);
+        if (idx == -1) return false;
+        int colon = json.indexOf(':', idx + search.length());
+        if (colon == -1) return false;
+        int start = colon + 1;
+        while (start < json.length() && Character.isWhitespace(json.charAt(start))) start++;
+        return json.startsWith("true", start);
     }
 
     private static long parseLong(String json, String key) {

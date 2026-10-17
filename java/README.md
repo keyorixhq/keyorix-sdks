@@ -63,7 +63,10 @@ String dbPassword = client.getSecretIn("my-project", "production", "db-password"
   identity token over a user's password.
 - Keyorix.login(serverUrl, username, password) -> String — authenticates
   with a human's username/password. For interactive use, not for an
-  application's long-running credential.
+  application's long-running credential. For an account with MFA it throws
+  `MFARequiredException` (`getChallenge()`); call
+  `Keyorix.login(serverUrl, username, password, "123456")`, or
+  `Keyorix.verifyMfa(serverUrl, e.getChallenge(), code)`, to finish.
 - client.getSecretIn(project, environment, name) -> String — a single
   server-authorized round trip
   (`GET /api/v1/secrets/value?ref=project/environment/name`). Needs no
@@ -78,6 +81,9 @@ String dbPassword = client.getSecretIn("my-project", "production", "db-password"
   project/environment-list permission to do so.
 - client.listSecretsScoped(project, environment) -> List<Secret> —
   follows every page the server reports.
+- client.listDeletedSecrets(projectId) -> List<Secret> — the project's
+  soft-deleted secrets; `secret.getPurgeAt()` is the restore deadline (RFC 3339
+  UTC; empty on live secrets). Needs server v0.96.0+.
 - client.health() -> boolean
 
 `project`/`environment` each have two overloads: by name (`String`, resolved to

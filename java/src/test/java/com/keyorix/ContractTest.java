@@ -154,6 +154,62 @@ class ContractTest {
         return Long.parseLong(json.substring(start, end));
     }
 
+    /** RFC 6238 code (HMAC-SHA1, 6 digits, 30s step) for a base32 secret. */
+    private static String totpCode(String base32Secret, long atMillis) throws Exception {
+        String alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
+        ByteArrayOutputStream key = new ByteArrayOutputStream();
+        int buffer = 0, bits = 0;
+        for (char c : base32Secret.replace("=", "").replace(" ", "").toUpperCase().toCharArray()) {
+            buffer = (buffer << 5) | alphabet.indexOf(c);
+            bits += 5;
+            if (bits >= 8) {
+                key.write((buffer >> (bits - 8)) & 0xFF);
+                bits -= 8;
+            }
+        }
+        long counter = atMillis / 1000 / 30;
+        byte[] msg = java.nio.ByteBuffer.allocate(8).putLong(counter).array();
+        javax.crypto.Mac mac = javax.crypto.Mac.getInstance("HmacSHA1");
+        mac.init(new javax.crypto.spec.SecretKeySpec(key.toByteArray(), "HmacSHA1"));
+        byte[] h = mac.doFinal(msg);
+        int off = h[h.length - 1] & 0x0f;
+        int bin = ((h[off] & 0x7f) << 24) | ((h[off + 1] & 0xff) << 16) | ((h[off + 2] & 0xff) << 8) | (h[off + 3] & 0xff);
+        return String.format("%06d", bin % 1_000_000);
+    }
+
+    @Test
+    void mfaLoginThrowsTypedExceptionWithChallengeThenCompletes() throws Exception {
+        // Creates a fresh user via the admin session and enrols TOTP MFA for it
+        // (raw HTTP: neither is part of this SDK's public surface).
+        String username = "mfa-user-" + System.nanoTime();
+        String password = "MfaUserPassw0rd!";
+        int status = postJson(serverUrl + "/api/v1/users",
+            "{\"username\":\"" + username + "\",\"email\":\"" + username + "@example.com\","
+                + "\"display_name\":\"MFA contract user\",\"password\":\"" + password + "\"}", token);
+        assertTrue(status < 300, "POST /api/v1/users: unexpected status " + status);
+        String userToken = Keyorix.login(serverUrl, username, password);
+        StringBuilder enrol = new StringBuilder();
+        status = postJson(serverUrl + "/api/v1/auth/mfa/enroll", "{}", userToken, enrol);
+        assertTrue(status < 300, "POST mfa/enroll: unexpected status " + status);
+        String secret = JsonParser.extractString(enrol.toString(), "secret");
+        assertNotNull(secret);
+        status = postJson(serverUrl + "/api/v1/auth/mfa/activate",
+            "{\"code\":\"" + totpCode(secret, System.currentTimeMillis()) + "\",\"password\":\"" + password + "\"}", userToken);
+        assertTrue(status < 300, "POST mfa/activate: unexpected status " + status);
+
+        MFARequiredException mfa = assertThrows(MFARequiredException.class,
+            () -> Keyorix.login(serverUrl, username, password));
+        assertFalse(mfa.getChallenge() == null || mfa.getChallenge().isEmpty(), "challenge must be set");
+        assertTrue(mfa.isTotpAvailable());
+
+        assertThrows(AuthException.class, () -> Keyorix.verifyMfa(serverUrl, mfa.getChallenge(), "000000"));
+
+        // Next 30s step: the code used at activation is single-use.
+        String code = totpCode(secret, System.currentTimeMillis() + 30_000);
+        String mfaToken = Keyorix.login(serverUrl, username, password, code);
+        assertTrue(Keyorix.newClient(serverUrl, mfaToken).health());
+    }
+
     @Test
     void health() throws KeyorixException {
         assertTrue(client.health());
@@ -196,6 +252,33 @@ class ContractTest {
 
         String value = client.getSecretScoped(secretName, defaultProject.getId(), devEnv.getId());
         assertEquals(secretValue, value);
+    }
+
+    @Test
+    void deletedSecretExposesPurgeAt() throws Exception {
+        Project defaultProject = client.listProjects().stream()
+                .filter(p -> p.getName().equals("default")).findFirst().orElseThrow();
+        Environment devEnv = client.listEnvironments(defaultProject.getId()).stream()
+                .filter(e -> e.getName().equals("development")).findFirst().orElseThrow();
+        String name = "contract-purge-" + System.nanoTime();
+        seedSecret(defaultProject.getId(), devEnv.getId(), name, "v");
+        Secret live = client.listSecretsScoped(defaultProject.getId(), devEnv.getId()).stream()
+                .filter(s -> s.getName().equals(name)).findFirst().orElseThrow();
+        assertEquals("", live.getPurgeAt(), "a live secret has no purgeAt");
+
+        // DELETE is not part of this SDK's public surface: raw HTTP.
+        HttpURLConnection conn = (HttpURLConnection) new URL(serverUrl + "/api/v1/secrets/" + live.getId()).openConnection();
+        conn.setRequestMethod("DELETE");
+        conn.setRequestProperty("Authorization", "Bearer " + token);
+        assertEquals(204, conn.getResponseCode());
+        conn.disconnect();
+
+        Secret deleted = client.listDeletedSecrets(defaultProject.getId()).stream()
+                .filter(s -> s.getId() == live.getId()).findFirst().orElse(null);
+        assertNotNull(deleted, "soft-deleted secret missing from listDeletedSecrets");
+        assertFalse(deleted.getPurgeAt().isEmpty(), "soft-deleted secret has no purgeAt");
+        double days = java.time.Duration.between(java.time.Instant.now(), java.time.Instant.parse(deleted.getPurgeAt())).toSeconds() / 86400.0;
+        assertTrue(days > 29 && days < 31, "purgeAt " + deleted.getPurgeAt() + " is not ~30 days out (retention_days=30)");
     }
 
     @Test
