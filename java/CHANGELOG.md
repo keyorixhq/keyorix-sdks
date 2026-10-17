@@ -4,6 +4,15 @@ All notable changes to the Java SDK are documented here.
 
 ## v0.3.0 (unreleased)
 
+### Documentation and tests
+
+- README: the quickstart now shows its `Secret`/`List` imports, and the
+  exception list includes `ForbiddenException` and `NotFoundException` (what
+  `getSecretIn`/`getSecretByRef` throw for a missing secret).
+- Contract test: a fresh machine-identity token now expects `listProjects()`
+  to succeed with an empty list (keyorix #2780) and `GET /projects/{id}` to
+  be 403; a bad token still gives `AuthException`.
+
 ### Added
 
 - `KeyorixClient.getSecretByRef(ref)` (`GET /api/v1/secrets/value?ref=project/environment/name`)

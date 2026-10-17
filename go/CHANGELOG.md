@@ -2,6 +2,17 @@
 
 All notable changes to the Go SDK are documented here.
 
+## Unreleased
+
+### Documentation and tests
+
+- README: new Errors section (`AuthError`, `ForbiddenError`, `NotFoundError`,
+  `SecretNotFoundError`, `AmbiguousSecretError`) and the Go requirement now
+  matches `go.mod` (1.26.2, was documented as 1.21+).
+- Contract test: a fresh machine-identity token now expects `ListProjects` to
+  succeed with an empty list (keyorix #2780) and `GET /projects/{id}` to be
+  403; a bad token still gives `*AuthError`.
+
 ## v0.3.0 — 2026-10-02
 
 ### Added
