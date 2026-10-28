@@ -9,4 +9,5 @@ public class NotFoundException extends KeyorixException {
     private static final long serialVersionUID = 1L;
     public NotFoundException(String message) { super(message); }
     public NotFoundException(String message, int statusCode, String responseBody) { super(message, statusCode, responseBody); }
+    public NotFoundException(String message, int statusCode, String responseBody, String errorCode) { super(message, statusCode, responseBody, errorCode); }
 }

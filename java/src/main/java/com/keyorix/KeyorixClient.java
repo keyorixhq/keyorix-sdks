@@ -414,23 +414,50 @@ public class KeyorixClient {
 
     /**
      * Maps a non-2xx HTTP status to a typed exception: AuthException (401),
-     * ForbiddenException (403), NotFoundException (404), or the generic
+     * ForbiddenException (403), NotFoundException (404),
+     * SecretUnavailableException (409 with a secret-state code), or the generic
      * KeyorixException for anything else. Every request path throws through
      * this so callers can catch the specific type they need, regardless of
      * which method failed.
      */
     private static KeyorixException mapError(int status, String body) {
+        String code = body == null ? null : JsonParser.extractString(body, "error");
         switch (status) {
             case 401:
-                return new AuthException("Unauthorized — check your token", status, body);
+                return new AuthException("Unauthorized — check your token", status, body, code);
             case 403:
-                return new ForbiddenException("Forbidden — token lacks permission for this request", status, body);
+                if (CODE_SECRET_ACCESS_OUTSIDE_SCHEDULE.equals(code)) {
+                    return new ForbiddenException("Forbidden — the secret is outside its access schedule", status, body, code);
+                }
+                return new ForbiddenException("Forbidden — token lacks permission for this request", status, body, code);
             case 404:
-                return new NotFoundException("Resource not found", status, body);
+                return new NotFoundException("Resource not found", status, body, code);
+            case 409:
+                if (CODE_SECRET_EXPIRED.equals(code)) {
+                    return new SecretUnavailableException("The secret has expired", status, body, code);
+                }
+                if (CODE_SECRET_SUSPENDED.equals(code)) {
+                    return new SecretUnavailableException("The secret is suspended", status, body, code);
+                }
+                if (CODE_SECRET_MAX_READS_EXHAUSTED.equals(code)) {
+                    return new SecretUnavailableException("The secret has reached its maximum number of reads", status, body, code);
+                }
+                return new KeyorixException("Server returned " + status, status, body, code);
             default:
-                return new KeyorixException("Server returned " + status, status, body);
+                return new KeyorixException("Server returned " + status, status, body, code);
         }
     }
+
+    /**
+     * Stable error codes the server sends when a secret's own state refuses a
+     * value read. A read outside the access schedule is a 403
+     * ({@link ForbiddenException} with this code); the other three are a 409
+     * ({@link SecretUnavailableException}).
+     */
+    public static final String CODE_SECRET_ACCESS_OUTSIDE_SCHEDULE = "SecretAccessOutsideSchedule";
+    public static final String CODE_SECRET_EXPIRED = "SecretExpired";
+    public static final String CODE_SECRET_SUSPENDED = "SecretSuspended";
+    public static final String CODE_SECRET_MAX_READS_EXHAUSTED = "SecretMaxReadsExhausted";
 
     private HttpURLConnection openConnection(String url, String method, boolean auth) throws IOException {
         HttpURLConnection conn = (HttpURLConnection) new URL(url).openConnection();

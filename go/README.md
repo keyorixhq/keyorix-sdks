@@ -81,6 +81,23 @@ Authenticates with a human's username/password and returns a session token.
 For interactive use (a developer at a terminal, the CLI's own login flow) —
 not for an application's long-running credential.
 
+An account with a second factor (MFA, the server default) gets a challenge
+instead of a session: `Login` returns a `*keyorix.MFARequiredError` carrying
+`Challenge` and `Methods()` (`"totp"`, `"webauthn"`), never a bare "no token"
+error. Complete it with `keyorix.VerifyMFA`:
+
+```go
+token, err := keyorix.Login(ctx, url, user, pass)
+var mfa *keyorix.MFARequiredError
+if errors.As(err, &mfa) {
+    token, err = keyorix.VerifyMFA(ctx, url, mfa.Challenge, totpCodeFromUser)
+}
+```
+
+`VerifyMFA(ctx, serverURL, challenge, code string) (string, error)` takes a TOTP
+or recovery code; a wrong or expired code or challenge is an `*AuthError`. A
+passkey (WebAuthn) needs a browser ceremony the SDK does not run.
+
 ### `client.GetSecretIn(ctx, project, environment, name string) (string, error)`
 Returns the plaintext value of secret `name` in `project`/`environment`
 (all by name), via a single server-authorized round trip

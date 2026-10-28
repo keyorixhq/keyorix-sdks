@@ -52,7 +52,12 @@ Zero dependencies — stdlib only. Or just copy keyorix.py into your project.
   token over a user's password.
 - keyorix.login(server_url, username, password) -> str — authenticates
   with a human's username/password. For interactive use, not for an
-  application's long-running credential.
+  application's long-running credential. On an account with a second factor
+  (MFA, the server default) it raises `MFARequiredError` (an `AuthError`)
+  carrying `.challenge` and `.methods` (`"totp"`, `"webauthn"`); complete it
+  with `keyorix.verify_mfa(server_url, e.challenge, totp_code) -> str` (TOTP or
+  recovery code; a wrong or expired one raises `AuthError`). A passkey needs a
+  browser ceremony the SDK does not run.
 - client.get_secret_in(project, environment, name) -> str — a single
   server-authorized round trip
   (`GET /api/v1/secrets/value?ref=project/environment/name`). Needs no
@@ -88,6 +93,7 @@ server — use `get_secret_scoped`/`list_secrets_scoped` instead.
 
 - KeyorixError — base
 - AuthError — authentication failure (HTTP 401)
+- MFARequiredError — `login()` got an MFA challenge (an `AuthError`; `.challenge`, `.methods`)
 - ForbiddenError — token authenticated but not permitted (HTTP 403)
 - NotFoundError — resource not found (HTTP 404), which is what
   `get_secret_in`/`get_secret_by_ref` raise for a missing secret, project or environment

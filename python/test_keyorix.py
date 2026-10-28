@@ -3,6 +3,7 @@
 import io
 import unittest
 import urllib.error
+import unittest.mock
 from unittest.mock import patch
 import json
 import keyorix
@@ -67,6 +68,50 @@ class TestClient(unittest.TestCase):
         with self.assertRaises(keyorix.KeyorixError):
             keyorix.login("http://example.com:8080", "user", "pass")
 
+    @staticmethod
+    def _ok(payload):
+        resp = unittest.mock.MagicMock()
+        resp.read.return_value = json.dumps(payload).encode()
+        resp.__enter__.return_value = resp
+        return resp
+
+    @patch("keyorix.urllib.request.urlopen")
+    def test_login_mfa_challenge_raises_typed_error(self, mock_urlopen):
+        mock_urlopen.return_value = self._ok(
+            {"data": {"mfa_required": True, "mfa_challenge": "chal-1", "totp_available": True, "webauthn_available": True}}
+        )
+        with self.assertRaises(keyorix.MFARequiredError) as ctx:
+            keyorix.login("http://localhost:8080", "u", "p")
+        e = ctx.exception
+        self.assertIsInstance(e, keyorix.AuthError)  # backward compatible
+        self.assertEqual(e.challenge, "chal-1")
+        self.assertEqual(e.methods, ["totp", "webauthn"])
+        self.assertNotIn("chal-1", str(e))
+
+    @patch("keyorix.urllib.request.urlopen")
+    def test_login_without_token_or_challenge_is_generic_auth_error(self, mock_urlopen):
+        mock_urlopen.return_value = self._ok({"data": {}})
+        with self.assertRaises(keyorix.AuthError) as ctx:
+            keyorix.login("http://localhost:8080", "u", "p")
+        self.assertNotIsInstance(ctx.exception, keyorix.MFARequiredError)
+
+    @patch("keyorix.urllib.request.urlopen")
+    def test_verify_mfa_returns_session_and_posts_challenge_and_code(self, mock_urlopen):
+        mock_urlopen.return_value = self._ok({"data": {"token": "sess"}})
+        self.assertEqual(keyorix.verify_mfa("http://localhost:8080", "chal-1", "123456"), "sess")
+        req = mock_urlopen.call_args[0][0]
+        self.assertTrue(req.full_url.endswith("/auth/mfa/verify"))
+        self.assertEqual(json.loads(req.data), {"mfa_challenge": "chal-1", "code": "123456"})
+
+    @patch("keyorix.urllib.request.urlopen")
+    def test_verify_mfa_wrong_code_is_auth_error(self, mock_urlopen):
+        mock_urlopen.side_effect = urllib.error.HTTPError(
+            "http://localhost:8080/auth/mfa/verify", 401, "Unauthorized", {}, io.BytesIO(b'{"error":"Unauthorized"}')
+        )
+        with self.assertRaises(keyorix.AuthError) as ctx:
+            keyorix.verify_mfa("http://localhost:8080", "c", "000000")
+        self.assertEqual(ctx.exception.status_code, 401)
+
     def test_keyorix_error_message_omits_body(self):
         err = keyorix.KeyorixError(
             "Server returned 500", status_code=500, response_body="internal stack trace here"
@@ -122,6 +167,44 @@ class TestClient(unittest.TestCase):
         with self.assertRaises(keyorix.NotFoundError) as ctx:
             client._request("GET", "/api/v1/secrets")
         self.assertEqual(ctx.exception.status_code, 404)
+
+    # A value read the secret's own state refuses (server ERRMAP-1): 409 with a
+    # secret-state code is a SecretUnavailableError carrying that code; a
+    # schedule refusal stays a ForbiddenError but says what it is. Neither
+    # message echoes the server's body.
+    @patch("keyorix.urllib.request.urlopen")
+    def test_secret_read_refusals(self, mock_urlopen):
+        cases = [
+            (409, "SecretExpired", keyorix.SecretUnavailableError, "has expired"),
+            (409, "SecretSuspended", keyorix.SecretUnavailableError, "is suspended"),
+            (409, "SecretMaxReadsExhausted", keyorix.SecretUnavailableError, "maximum number of reads"),
+            (403, "SecretAccessOutsideSchedule", keyorix.ForbiddenError, "outside its access schedule"),
+        ]
+        client = keyorix.Client("http://localhost:8080", "test-token")
+        for status, code, exc_type, want in cases:
+            with self.subTest(code=code):
+                body = json.dumps({"success": False, "code": status, "error": code, "message": "SERVER-TEXT"})
+                mock_urlopen.side_effect = urllib.error.HTTPError(
+                    "http://localhost:8080/api/v1/secrets/value", status, "x", {}, io.BytesIO(body.encode())
+                )
+                with self.assertRaises(exc_type) as ctx:
+                    client._request("GET", "/api/v1/secrets/value?ref=p/e/n")
+                self.assertEqual(ctx.exception.status_code, status)
+                self.assertEqual(ctx.exception.code, code)
+                self.assertIn(want, str(ctx.exception))
+                self.assertNotIn("SERVER-TEXT", str(ctx.exception))
+
+    @patch("keyorix.urllib.request.urlopen")
+    def test_unrelated_409_stays_generic(self, mock_urlopen):
+        body = json.dumps({"error": "ConflictError", "message": "x"})
+        mock_urlopen.side_effect = urllib.error.HTTPError(
+            "http://localhost:8080/api/v1/secrets", 409, "Conflict", {}, io.BytesIO(body.encode())
+        )
+        client = keyorix.Client("http://localhost:8080", "test-token")
+        with self.assertRaises(keyorix.KeyorixError) as ctx:
+            client._request("GET", "/api/v1/secrets")
+        self.assertNotIsInstance(ctx.exception, keyorix.SecretUnavailableError)
+        self.assertEqual(ctx.exception.code, "ConflictError")
 
     # ── TLS with a private CA ───────────────────────────────────────────────────
     # Proves the ca_file option actually gets verified against, not just

@@ -27,10 +27,25 @@ export interface ClientOptions {
 export declare class KeyorixError extends Error {
   statusCode?: number;
   responseBody?: string;
+  /** The server's stable error code, e.g. "SecretSuspended". */
+  errorCode?: string;
 }
 export declare class AuthError extends KeyorixError {}
+/**
+ * login() on an account with a second factor: complete with verifyMfa(serverUrl,
+ * err.challenge, code). Still an AuthError, as before.
+ */
+export declare class MFARequiredError extends AuthError {
+  challenge: string;
+  totpAvailable: boolean;
+  webauthnAvailable: boolean;
+  /** Second factors the account has: "totp" and/or "webauthn". */
+  methods: string[];
+}
 export declare class ForbiddenError extends KeyorixError {}
 export declare class NotFoundError extends KeyorixError {}
+/** 409: the secret has expired, is suspended or used up its max reads (see errorCode). */
+export declare class SecretUnavailableError extends KeyorixError {}
 export declare class SecretNotFoundError extends KeyorixError {}
 export declare class AmbiguousSecretError extends KeyorixError {
   ids: number[];
@@ -40,6 +55,14 @@ export declare function login(
   serverUrl: string,
   username: string,
   password: string,
+  timeout?: number
+): Promise<string>;
+
+/** Completes a login that threw MFARequiredError with a TOTP or recovery code. */
+export declare function verifyMfa(
+  serverUrl: string,
+  challenge: string,
+  code: string,
   timeout?: number
 ): Promise<string>;
 
