@@ -105,7 +105,14 @@ jobs:
 
       - name: Go contract test
         working-directory: sdks/go
-        run: go test -run TestContract -v ./...
+        run: |
+          set -o pipefail
+          if ! go test -run TestContract -v ./... 2>&1 | tee "$RUNNER_TEMP/go-contract.out"; then
+            enc() { python3 -c 'import sys;d=sys.stdin.read();print(d.replace("%","%25").replace("\r","%0D").replace("\n","%0A"))'; }
+            echo "::error title=DIAG go-test-output::$(grep -E -- '--- FAIL|FAIL|Fatal|fatal|status|panic|_test.go:' "$RUNNER_TEMP/go-contract.out" | tail -n 40 | cut -c1-300 | enc)"
+            echo "::error title=DIAG server-log-tail::$(tail -n 40 "$RUNNER_TEMP/keyorix-server.log" | cut -c1-300 | enc)"
+            exit 1
+          fi
 
       - name: npm ci
         working-directory: sdks/node
