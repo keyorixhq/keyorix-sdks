@@ -4,6 +4,15 @@ All notable changes to the Python SDK are documented here.
 
 ## v0.3.0 (unreleased)
 
+### Documentation and tests
+
+- README: the exception list now includes `ForbiddenError` and
+  `NotFoundError` (what `get_secret_in`/`get_secret_by_ref` raise for a
+  missing secret).
+- Contract test: a fresh machine-identity token now expects `list_projects()`
+  to succeed with an empty list (keyorix #2780) and `GET /projects/{id}` to
+  be 403; a bad token still gives `AuthError`.
+
 ### Added
 
 - `Client.get_secret_by_ref(ref)` (`GET /api/v1/secrets/value?ref=project/environment/name`)
