@@ -8,6 +8,8 @@ import java.net.HttpURLConnection;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
@@ -202,12 +204,8 @@ class ContractTest {
     void patAuthWorksTransparently() throws Exception {
         String pat = createPAT(token, "contract-test-pat");
         KeyorixClient patClient = Keyorix.newClient(serverUrl, pat);
-        try {
-            patClient.listProjects();
-        } catch (KeyorixException e) {
-            fail("Client with a PAT: " + e.getMessage()
-                + " (expected success -- a PAT presents identically to a session token)");
-        }
+        assertDoesNotThrow(() -> { patClient.listProjects(); },
+            "Client with a PAT should succeed -- a PAT presents identically to a session token");
     }
 
     @Test
@@ -227,9 +225,13 @@ class ContractTest {
     void timeoutIsEnforcedAgainstASlowServer() throws Exception {
         com.sun.net.httpserver.HttpServer slow =
             com.sun.net.httpserver.HttpServer.create(new java.net.InetSocketAddress("localhost", 0), 0);
+        // The handler blocks on a latch (released in the finally below) instead
+        // of sleeping a fixed time, so the server is "slow" for exactly as long
+        // as the client's 10ms timeout needs -- no timing race, no Thread.sleep.
+        CountDownLatch release = new CountDownLatch(1);
         slow.createContext("/", exchange -> {
             try {
-                Thread.sleep(200);
+                release.await(5, TimeUnit.SECONDS);
             } catch (InterruptedException ignored) {
                 Thread.currentThread().interrupt();
             }
@@ -244,8 +246,9 @@ class ContractTest {
             KeyorixClient slowClient = new KeyorixClient(
                 "http://localhost:" + slow.getAddress().getPort(), "tok", java.time.Duration.ofMillis(10));
             assertThrows(KeyorixException.class, slowClient::listProjects,
-                "expected a timeout error from a 10ms client against a 200ms-slow server");
+                "expected a timeout error from a 10ms client against a stalled server");
         } finally {
+            release.countDown();
             slow.stop(0);
         }
     }
