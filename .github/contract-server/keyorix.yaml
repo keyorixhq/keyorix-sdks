@@ -48,6 +48,10 @@ security:
   enable_file_permission_check: false
   auto_fix_file_permissions: true
   allow_unsafe_file_permissions: false
+  # The contract tests exercise the API surface, not MFA enrolment. Since the server
+  # defaults to require_mfa: true, every admin call in this throwaway fixture would be
+  # refused until an MFA factor is enrolled. Decision (Andrei, 2026-10-17): off here only.
+  require_mfa: false
   require_transport_tls: false
 
 password_policy:
