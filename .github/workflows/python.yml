@@ -78,7 +78,12 @@ jobs:
           pip install --no-cache-dir --only-binary :all: --require-hashes -r requirements-dev.lock.txt
       - name: Run pip-audit
         working-directory: python
-        run: pip-audit
+        run: |
+          set -o pipefail
+          if ! pip-audit 2>&1 | tee "$RUNNER_TEMP/pip-audit.out"; then
+            echo "::error title=DIAG pip-audit::$(tail -n 30 "$RUNNER_TEMP/pip-audit.out" | cut -c1-300 | python3 -c 'import sys;d=sys.stdin.read();print(d.replace("%","%25").replace("\r","%0D").replace("\n","%0A"))')"
+            exit 1
+          fi
 
   secret-scan:
     name: Secret scan (detect-secrets)
