@@ -16,6 +16,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.stream.Collectors;
 import javax.net.ssl.HttpsURLConnection;
 import javax.net.ssl.SSLContext;
 import javax.net.ssl.SSLSocketFactory;
@@ -41,8 +42,16 @@ import javax.net.ssl.TrustManagerFactory;
  */
 public class KeyorixClient {
 
+    // These are fixed routes of the Keyorix server's versioned HTTP API — part
+    // of the wire contract, not deployment configuration. The deployment-
+    // specific part (scheme/host/port) is already the caller-supplied baseUrl.
+    // java:S1075 expects hardcoded URIs to be configurable; for a fixed API
+    // contract that would only let a misconfiguration break every request.
+    @SuppressWarnings("java:S1075")
     private static final String SECRETS_PATH = "/api/v1/secrets";
+    @SuppressWarnings("java:S1075")
     private static final String SECRETS_VALUE_PATH = "/api/v1/secrets/value";
+    @SuppressWarnings("java:S1075")
     private static final String PROJECTS_PATH = "/api/v1/projects";
     private static final String HEALTH_PATH = "/health";
 
@@ -161,7 +170,7 @@ public class KeyorixClient {
      * to the old, unscoped behavior) — use
      * {@link #getSecretScoped(String, String, String)} instead.
      */
-    @Deprecated
+    @Deprecated(since = "0.3.0", forRemoval = true)
     public String getSecret(String name, String environment) throws KeyorixException {
         throw new KeyorixException(
             "getSecret(name, environment) was removed since v0.3.0 (an environment name is only "
@@ -176,7 +185,7 @@ public class KeyorixClient {
      * fallback to the old, unscoped behavior) — use
      * {@link #listSecretsScoped(String, String)} instead.
      */
-    @Deprecated
+    @Deprecated(since = "0.3.0", forRemoval = true)
     public List<Secret> listSecrets(String environment) throws KeyorixException {
         throw new KeyorixException(
             "listSecrets(environment) was removed since v0.3.0 (an environment name is only "
@@ -213,17 +222,15 @@ public class KeyorixClient {
      */
     public String getSecretScoped(String name, long projectId, long environmentId) throws KeyorixException {
         List<Secret> secrets = listSecretsScoped(projectId, environmentId);
-        List<Secret> matches = new ArrayList<>();
-        for (Secret s : secrets) {
-            if (name.equals(s.getName())) matches.add(s);
-        }
+        List<Secret> matches = secrets.stream()
+            .filter(s -> name.equals(s.getName()))
+            .collect(Collectors.toList());
         if (matches.isEmpty()) {
             throw new SecretNotFoundException(
                 "Secret '" + name + "' not found in project id=" + projectId + ", environment id=" + environmentId);
         }
         if (matches.size() > 1) {
-            List<Long> ids = new ArrayList<>();
-            for (Secret s : matches) ids.add(s.getId());
+            List<Long> ids = matches.stream().map(Secret::getId).collect(Collectors.toList());
             throw new AmbiguousSecretException(
                 "Secret '" + name + "' is ambiguous in project id=" + projectId + ", environment id="
                     + environmentId + ": matches IDs " + ids,

@@ -8,34 +8,24 @@ import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
 import java.security.KeyStore;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import static org.junit.jupiter.api.Assertions.*;
 
 class KeyorixClientTest {
 
-    @Test
-    void testClientConstruction() throws KeyorixException {
-        KeyorixClient client = new KeyorixClient("http://localhost:8080", "test-token");
-        assertNotNull(client);
-    }
-
-    @Test
-    void testClientStripsTrailingSlash() throws KeyorixException {
-        // Just verify construction doesn't throw
-        KeyorixClient client = new KeyorixClient("http://localhost:8080/", "test-token");
-        assertNotNull(client);
-    }
-
-    @Test
-    void testClientAllowsHttps() throws KeyorixException {
-        KeyorixClient client = new KeyorixClient("https://example.com:8443", "test-token");
-        assertNotNull(client);
-    }
-
-    @Test
-    void testClientAllowsLoopbackHttp() throws KeyorixException {
-        assertNotNull(new KeyorixClient("http://localhost:8080", "test-token"));
-        assertNotNull(new KeyorixClient("http://127.0.0.1:8080", "test-token"));
-        assertNotNull(new KeyorixClient("http://[::1]:8080", "test-token"));
+    // Plain construction, trailing slash (only verifies construction doesn't
+    // throw), https, and http on each loopback form (localhost, IPv4, IPv6).
+    @ParameterizedTest(name = "{0}")
+    @ValueSource(strings = {
+        "http://localhost:8080",
+        "http://localhost:8080/",
+        "https://example.com:8443",
+        "http://127.0.0.1:8080",
+        "http://[::1]:8080"
+    })
+    void testClientAcceptsValidServerUrl(String url) throws KeyorixException {
+        assertNotNull(new KeyorixClient(url, "test-token"));
     }
 
     @Test
@@ -123,7 +113,7 @@ class KeyorixClientTest {
         server.start();
         try {
             KeyorixClient client = new KeyorixClient("http://localhost:" + server.getAddress().getPort(), "test-token");
-            KeyorixException ex = assertThrows(expected, () -> client.listProjects());
+            KeyorixException ex = assertThrows(expected, client::listProjects);
             assertEquals(status, ex.getStatusCode());
         } finally {
             server.stop(0);
@@ -219,6 +209,9 @@ class KeyorixClientTest {
 
     // ── Deprecated environment-only methods: removed since v0.3.0 ──────────────
 
+    // Deliberately calls the removal-flagged methods: the test's purpose is to
+    // pin that they still throw without contacting the server.
+    @SuppressWarnings("removal")
     @Test
     void testListSecrets_deprecated_neverCallsServer() throws IOException, KeyorixException {
         HttpServer server = HttpServer.create(new InetSocketAddress("localhost", 0), 0);
@@ -239,6 +232,7 @@ class KeyorixClientTest {
         }
     }
 
+    @SuppressWarnings("removal")
     @Test
     void testGetSecret_deprecated_neverCallsServer() throws IOException, KeyorixException {
         HttpServer server = HttpServer.create(new InetSocketAddress("localhost", 0), 0);
