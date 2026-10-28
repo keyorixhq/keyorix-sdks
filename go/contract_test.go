@@ -352,7 +352,7 @@ func TestContract_FullClientSurface(t *testing.T) {
 		}
 	})
 
-	t.Run("New works transparently with a machine identity token", func(t *testing.T) {
+	t.Run("ListProjects succeeds with an empty list for a zero-grant token", func(t *testing.T) {
 		if defaultProjectID == 0 {
 			t.Skip("default project not found (see ListProjects subtest)")
 		}
@@ -361,14 +361,47 @@ func TestContract_FullClientSurface(t *testing.T) {
 		if err != nil {
 			t.Fatalf("New: %v", err)
 		}
-		// A brand-new machine identity holds no roles, so this must
-		// authenticate (not AuthError) even though it can't yet be
-		// authorized for anything (ForbiddenError) -- proving the token is
-		// recognized as valid, distinct from being permitted.
-		_, err = machineClient.ListProjects(ctx)
-		var forbidden *ForbiddenError
-		if !errors.As(err, &forbidden) {
-			t.Errorf("ListProjects with a fresh machine token: got %T (%v), want *ForbiddenError", err, err)
+		// A brand-new machine identity holds no roles. List routes are
+		// filtered by permission, so it authenticates and gets an EMPTY 200
+		// (not AuthError, not ForbiddenError).
+		got, err := machineClient.ListProjects(ctx)
+		if err != nil {
+			t.Fatalf("ListProjects with a zero-grant token: %v (want success with an empty list)", err)
+		}
+		if len(got) != 0 {
+			t.Errorf("ListProjects with a zero-grant token: got %d projects, want 0", len(got))
+		}
+	})
+
+	t.Run("GET /projects/{id} with a zero-grant token is forbidden (403)", func(t *testing.T) {
+		if defaultProjectID == 0 {
+			t.Skip("default project not found (see ListProjects subtest)")
+		}
+		machineToken := createMachineToken(t, serverURL, token, defaultProjectID)
+		req, err := http.NewRequest(http.MethodGet, fmt.Sprintf("%s/api/v1/projects/%d", serverURL, defaultProjectID), nil) //nolint:gosec // serverURL is the operator-supplied contract-test target, not attacker input
+		if err != nil {
+			t.Fatalf("build get-project request: %v", err)
+		}
+		req.Header.Set("Authorization", authBearer+machineToken)
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatalf("GET /api/v1/projects/%d: %v", defaultProjectID, err)
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusForbidden {
+			t.Errorf("GET /api/v1/projects/%d with a zero-grant token: got status %d, want 403", defaultProjectID, resp.StatusCode)
+		}
+	})
+
+	t.Run("ListProjects with a bad token is rejected (401)", func(t *testing.T) {
+		badClient, err := New(serverURL, "not-a-valid-token")
+		if err != nil {
+			t.Fatalf("New: %v", err)
+		}
+		_, err = badClient.ListProjects(ctx)
+		var authErr *AuthError
+		if !errors.As(err, &authErr) {
+			t.Errorf("ListProjects with a bad token: got %T (%v), want *AuthError", err, err)
 		}
 	})
 
