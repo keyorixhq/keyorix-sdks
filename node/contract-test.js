@@ -22,7 +22,7 @@
 // Skipped unless KEYORIX_CONTRACT_SERVER_URL is set.
 
 const http = require('node:http');
-const { Client, login, ForbiddenError } = require('./keyorix');
+const { Client, login, AuthError } = require('./keyorix');
 
 let passed = 0;
 let failed = 0;
@@ -51,6 +51,20 @@ function postJSON(serverUrl, path, body, token) {
     });
     req.on('error', reject);
     req.write(data);
+    req.end();
+  });
+}
+
+function getJSON(serverUrl, path, token) {
+  return new Promise((resolve, reject) => {
+    const url = new URL(path, serverUrl);
+    const mod = url.protocol === 'https:' ? require('node:https') : http;
+    const req = mod.request(url, { method: 'GET', headers: { Authorization: `Bearer ${token}` } }, (res) => {
+      let raw = '';
+      res.on('data', (chunk) => (raw += chunk));
+      res.on('end', () => resolve({ statusCode: res.statusCode, body: raw }));
+    });
+    req.on('error', reject);
     req.end();
   });
 }
@@ -186,14 +200,24 @@ async function runContractTests() {
   const machineToken = await createMachineToken(serverUrl, token, defaultProject.id);
   const machineClient = new Client(serverUrl, machineToken);
   try {
-    await machineClient.listProjects();
-    assert(false, 'expected a fresh machine token (no roles yet) to be forbidden, not succeed');
+    // A brand-new machine identity holds no roles. List routes are filtered by
+    // permission, so it authenticates and gets an EMPTY 200 (not AuthError,
+    // not ForbiddenError).
+    const machineProjects = await machineClient.listProjects();
+    assert(Array.isArray(machineProjects) && machineProjects.length === 0, `listProjects() succeeds with an empty list for a zero-grant token — got ${machineProjects.length} projects`);
   } catch (e) {
-    // A brand-new machine identity holds no roles, so this must authenticate
-    // (not AuthError) even though it can't yet be authorized for anything
-    // (ForbiddenError) -- proving the token is recognized as valid, distinct
-    // from being permitted.
-    assert(e instanceof ForbiddenError, `Client works transparently with a machine identity token — got ${e.constructor.name}, want ForbiddenError`);
+    assert(false, `listProjects() succeeds with an empty list for a zero-grant token — got ${e.constructor.name}: ${e.message}`);
+  }
+
+  const forbiddenResp = await getJSON(serverUrl, `/api/v1/projects/${defaultProject.id}`, machineToken);
+  assert(forbiddenResp.statusCode === 403, `GET /projects/{id} with a zero-grant token is forbidden (403) — got ${forbiddenResp.statusCode}`);
+
+  const badClient = new Client(serverUrl, 'not-a-valid-token');
+  try {
+    await badClient.listProjects();
+    assert(false, 'expected a bad token to be rejected with AuthError (401)');
+  } catch (e) {
+    assert(e instanceof AuthError, `listProjects() with a bad token is rejected (401) — got ${e.constructor.name}, want AuthError`);
   }
 
   const slowServer = http.createServer((req, res) => {
