@@ -110,10 +110,18 @@ expected outcome, not just read from server source:
 | MFA step-up during login | not implemented in any SDK | not implemented in any SDK | not implemented in any SDK | not implemented in any SDK |
 
 A fresh machine identity holds no roles by default — the "machine identity
-token" row verifies the token *authenticates* (rejected with
-403/`ForbiddenError`, not 401/`AuthError`), which is the correct proof that
+token" row verifies the token *authenticates*, which is the correct proof that
 the token is recognized as valid, distinct from being authorized for a
-specific action. MFA is a real, documented gap (login returns
+specific action. The server's rule for a caller with zero grants (decided
+2026-10-17):
+
+- **list routes** (`ListProjects`, ...) are filtered by permission: an empty
+  `200` with no items, not an error;
+- **single-object reads** (`GET /projects/{id}`) are `403` /
+  `ForbiddenError`;
+- **a bad or expired token** is `401` / `AuthError`.
+
+The contract suites in all four SDKs assert all three. MFA is a real, documented gap (login returns
 `mfa_required: true` when an account has TOTP/passkey enrolled; no SDK
 handles that response) — not exercised by the bootstrap-seeded admin used
 in these tests, and out of scope for this pass.
