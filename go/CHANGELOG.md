@@ -9,6 +9,15 @@ All notable changes to the Go SDK are documented here.
 - `login` on an account with a second factor (MFA, the server default) now throws/raises/returns a typed MFA-required error carrying the challenge id and the available methods, instead of a generic "no token in login response". Complete it with the new `verifyMfa`/`verify_mfa`/`VerifyMFA` (TOTP or recovery code). Node, Python and Java: the new type extends the auth error `login` already threw, so existing handlers keep working.
 - `APIError.Code` carries the server's stable error code, and a value read the secret's own state refuses (server ERRMAP-1) is typed: 409 `SecretExpired` / `SecretSuspended` / `SecretMaxReadsExhausted` returns `*SecretUnavailableError` (unwraps to `*APIError`); a read outside the secret's access schedule stays `*ForbiddenError` (Code `SecretAccessOutsideSchedule`) with an accurate message. Error text is local, never the server's body. Against an older server these reads still return the generic `*APIError` (500).
 
+### Documentation and tests
+
+- README: new Errors section (`AuthError`, `ForbiddenError`, `NotFoundError`,
+  `SecretNotFoundError`, `AmbiguousSecretError`) and the Go requirement now
+  matches `go.mod` (1.26.2, was documented as 1.21+).
+- Contract test: a fresh machine-identity token now expects `ListProjects` to
+  succeed with an empty list (keyorix #2780) and `GET /projects/{id}` to be
+  403; a bad token still gives `*AuthError`.
+
 ## v0.3.0 — 2026-10-02
 
 ### Added

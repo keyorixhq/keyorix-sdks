@@ -11,6 +11,15 @@ All notable changes to the Node.js SDK are documented here.
 
 ## v0.3.0 (unreleased)
 
+### Documentation and tests
+
+- README: the error list now includes `ForbiddenError` and `NotFoundError`
+  (what `getSecretIn`/`getSecretByRef` throw for a missing secret) and the
+  quickstart notes it must run inside an async function.
+- Contract test: a fresh machine-identity token now expects `listProjects()`
+  to succeed with an empty list (keyorix #2780) and `GET /projects/{id}` to
+  be 403; a bad token still gives `AuthError`.
+
 ### Added
 
 - `Client.getSecretByRef(ref)` (`GET /api/v1/secrets/value?ref=project/environment/name`)

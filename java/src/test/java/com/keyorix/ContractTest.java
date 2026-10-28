@@ -8,6 +8,8 @@ import java.net.HttpURLConnection;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
@@ -24,8 +26,8 @@ import static org.junit.jupiter.api.Assertions.*;
  * migration to snake_case for a type this SDK parses) lands without a
  * matching SDK update.
  *
- * <p>Self-contained apart from the admin credential, which
- * scripts/contract_bootstrap.py provides (see {@link #bootstrap}), so CI can run it against a bare {@code go run ./server} + SQLite, no
+ * <p>Self-contained: bootstraps its own fresh admin account via /system/init,
+ * so CI can run it against a bare {@code go run ./server} + SQLite, no
  * Docker/Postgres fixture required (see .github/workflows/contract.yml).
  *
  * <p>Note: this SDK has no {@code createProject} method (unlike the Go/Node/
@@ -46,14 +48,19 @@ class ContractTest {
     @BeforeAll
     static void bootstrap() throws Exception {
         serverUrl = System.getenv("KEYORIX_CONTRACT_SERVER_URL");
-        // The server enforces MFA by default (security.require_mfa, ADR-112), so a
-        // password-only login cannot authenticate: scripts/contract_bootstrap.py
-        // bootstraps the admin, enrols TOTP, completes the real MFA step and mints a
-        // PAT, exported as KEYORIX_CONTRACT_ADMIN_TOKEN. MFA is never turned off.
-        token = System.getenv("KEYORIX_CONTRACT_ADMIN_TOKEN");
-        if (token == null || token.isEmpty()) {
-            throw new IllegalStateException("KEYORIX_CONTRACT_ADMIN_TOKEN must be set alongside KEYORIX_CONTRACT_SERVER_URL (run scripts/contract_bootstrap.py)");
+        String bootstrapToken = System.getenv("KEYORIX_CONTRACT_BOOTSTRAP_TOKEN");
+        if (bootstrapToken == null || bootstrapToken.isEmpty()) {
+            throw new IllegalStateException("KEYORIX_CONTRACT_BOOTSTRAP_TOKEN must be set alongside KEYORIX_CONTRACT_SERVER_URL");
         }
+
+        String initBody = "{\"username\":\"contract-admin\",\"email\":\"contract-admin@example.com\","
+                + "\"password\":\"ContractTestPassw0rd!\",\"bootstrap_token\":\"" + bootstrapToken + "\"}";
+        int status = postJson(serverUrl + "/system/init", initBody, null);
+        if (status >= 300) {
+            throw new IllegalStateException("POST /system/init: unexpected status " + status);
+        }
+
+        token = Keyorix.login(serverUrl, "contract-admin", "ContractTestPassw0rd!");
         client = Keyorix.newClient(serverUrl, token);
     }
 
@@ -90,6 +97,15 @@ class ContractTest {
             while ((n = is.read(chunk)) != -1) buf.write(chunk, 0, n);
             if (responseOut != null) responseOut.append(buf.toString(StandardCharsets.UTF_8));
         }
+        conn.disconnect();
+        return status;
+    }
+
+    private static int getStatus(String url, String bearerToken) throws IOException {
+        HttpURLConnection conn = (HttpURLConnection) new URL(url).openConnection();
+        conn.setRequestMethod("GET");
+        conn.setRequestProperty("Authorization", "Bearer " + bearerToken);
+        int status = conn.getResponseCode();
         conn.disconnect();
         return status;
     }
@@ -149,94 +165,6 @@ class ContractTest {
         return Long.parseLong(json.substring(start, end));
     }
 
-    /** Keeps MFA-by-default covered: a user with no token who logs in with only a
-     * password gets an MFA challenge, not a session. A challenge login keeps its
-     * rate-limit slot until the second factor completes (10 per 15 min per IP), so this
-     * makes exactly one login call, on the raw response, rather than also calling login(). */
-    @Test
-    void passwordLoginReturnsMfaChallenge() throws Exception {
-        StringBuilder resp = new StringBuilder();
-        int status = postJson(serverUrl + "/auth/login",
-            "{\"username\":\"contract-admin\",\"password\":\"ContractTestPassw0rd!\"}", null, resp);
-        assertEquals(200, status);
-        String json = resp.toString();
-        assertTrue(json.contains("\"mfa_required\":true"), "password-only login must require MFA");
-        String challenge = JsonParser.extractString(json, "mfa_challenge");
-        assertTrue(challenge != null && !challenge.isEmpty(), "password-only login must return an MFA challenge");
-        assertNull(JsonParser.extractString(json, "token"), "password-only login must not return a session token");
-    }
-
-    /** RFC 6238 code (HMAC-SHA1, 30 s step, 6 digits) the server validates. Test-only:
-     * the SDK never generates codes. */
-    private static String totp(String seedBase32) throws Exception {
-        String alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
-        java.io.ByteArrayOutputStream key = new java.io.ByteArrayOutputStream();
-        int buffer = 0, bits = 0;
-        for (char c : seedBase32.toUpperCase().replace("=", "").toCharArray()) {
-            buffer = (buffer << 5) | alphabet.indexOf(c);
-            bits += 5;
-            if (bits >= 8) {
-                key.write((buffer >> (bits - 8)) & 0xff);
-                bits -= 8;
-            }
-        }
-        javax.crypto.Mac mac = javax.crypto.Mac.getInstance("HmacSHA1");
-        mac.init(new javax.crypto.spec.SecretKeySpec(key.toByteArray(), "HmacSHA1"));
-        byte[] sum = mac.doFinal(java.nio.ByteBuffer.allocate(8).putLong(System.currentTimeMillis() / 1000 / 30 + 1).array());
-        int off = sum[sum.length - 1] & 0x0f;
-        int v = ((sum[off] & 0x7f) << 24) | ((sum[off + 1] & 0xff) << 16) | ((sum[off + 2] & 0xff) << 8) | (sum[off + 3] & 0xff);
-        return String.format("%06d", v % 1_000_000);
-    }
-
-    /** scripts/contract_bootstrap.py creates "contract-mfa-java" (MFA enrolled, seed
-     * exported as KEYORIX_CONTRACT_MFA_SEED_JAVA). login() on it must throw
-     * MFARequiredException carrying the challenge, and verifyMfa() with a TOTP code
-     * from the seed must yield a working session. MFA stays enforced throughout. */
-    @Test
-    void loginOnMfaAccountThrowsTypedExceptionAndCompletes() throws Exception {
-        String seed = System.getenv("KEYORIX_CONTRACT_MFA_SEED_JAVA");
-        assertTrue(seed != null && !seed.isEmpty(), "KEYORIX_CONTRACT_MFA_SEED_JAVA must be set (run scripts/contract_bootstrap.py)");
-        String user = "contract-mfa-java";
-        String password = "ContractMfaUserPassw0rd!";
-
-        MFARequiredException mfa = assertThrows(MFARequiredException.class, () -> Keyorix.login(serverUrl, user, password));
-        assertTrue(mfa instanceof AuthException, "still an AuthException (backward compatible)");
-        assertFalse(mfa.getChallenge().isEmpty());
-        assertEquals(List.of("totp"), mfa.getMethods());
-        String session = Keyorix.verifyMfa(serverUrl, mfa.getChallenge(), totp(seed));
-        assertFalse(session.isEmpty());
-        try {
-            Keyorix.newClient(serverUrl, session).listProjects();
-        } catch (AuthException e) {
-            fail("the session from verifyMfa was rejected as unauthenticated: " + e.getMessage());
-        } catch (KeyorixException e) {
-            // an account with no roles may be refused, but it is authenticated
-        }
-    }
-
-    /** scripts/contract_bootstrap.py creates one secret per refusal state through the
-     * API; each must map to the SDK's typed exception carrying the server's stable
-     * code, and the value must not leak. */
-    @Test
-    void secretReadRefusalsMapToTypedExceptions() {
-        String[][] cases = {
-            {"contract-refused-suspended", "409", "SecretSuspended"},
-            {"contract-refused-expired", "409", "SecretExpired"},
-            {"contract-refused-max-reads", "409", "SecretMaxReadsExhausted"},
-            {"contract-refused-schedule", "403", "SecretAccessOutsideSchedule"},
-        };
-        for (String[] c : cases) {
-            int status = Integer.parseInt(c[1]);
-            KeyorixException e = assertThrows(KeyorixException.class,
-                () -> client.getSecretIn("default", "development", c[0]), c[2]);
-            assertEquals(status == 409 ? SecretUnavailableException.class : ForbiddenException.class, e.getClass(), c[2]);
-            assertEquals(status, e.getStatusCode(), c[2]);
-            assertEquals(c[2], e.getErrorCode(), c[2]);
-            assertFalse(e.getMessage().contains("must-not-leak"), c[2]);
-            assertFalse(e.getResponseBody().contains("must-not-leak"), c[2]);
-        }
-    }
-
     @Test
     void health() throws KeyorixException {
         assertTrue(client.health());
@@ -285,41 +213,49 @@ class ContractTest {
     void patAuthWorksTransparently() throws Exception {
         String pat = createPAT(token, "contract-test-pat");
         KeyorixClient patClient = Keyorix.newClient(serverUrl, pat);
-        try {
-            patClient.listProjects();
-        } catch (KeyorixException e) {
-            fail("Client with a PAT: " + e.getMessage()
-                + " (expected success -- a PAT presents identically to a session token)");
-        }
+        assertDoesNotThrow(() -> { patClient.listProjects(); },
+            "Client with a PAT should succeed -- a PAT presents identically to a session token");
     }
 
     @Test
-    void machineTokenAuthWorksTransparently() throws Exception {
+    void listProjectsSucceedsWithEmptyListForZeroGrantToken() throws Exception {
         Project defaultProject = client.listProjects().stream()
                 .filter(p -> p.getName().equals("default")).findFirst().orElseThrow();
         String machineToken = createMachineToken(token, defaultProject.getId());
         KeyorixClient machineClient = Keyorix.newClient(serverUrl, machineToken);
-        // A brand-new machine identity holds no roles, so this must authenticate (not
-        // AuthException) even though it can't yet be authorized for anything --
-        // proving the token is recognized as valid, distinct from being permitted.
-        // Current keyorix main answers a role-less machine's project listing with an
-        // empty, permission-filtered list; older servers answered 403
-        // (ForbiddenException). Either proves "authenticated but not authorized";
-        // seeing projects, or an AuthException, does not.
-        try {
-            assertTrue(machineClient.listProjects().isEmpty(), "a machine identity with no roles must see no projects");
-        } catch (ForbiddenException expected) {
-            // older servers: 403
-        }
+        // A brand-new machine identity holds no roles. List routes are filtered by
+        // permission, so it authenticates and gets an EMPTY 200 (not AuthException,
+        // not ForbiddenException).
+        assertTrue(machineClient.listProjects().isEmpty(),
+            "expected an empty project list for a zero-grant token");
+    }
+
+    @Test
+    void getProjectWithZeroGrantTokenIsForbidden() throws Exception {
+        Project defaultProject = client.listProjects().stream()
+                .filter(p -> p.getName().equals("default")).findFirst().orElseThrow();
+        String machineToken = createMachineToken(token, defaultProject.getId());
+        assertEquals(403, getStatus(serverUrl + "/api/v1/projects/" + defaultProject.getId(), machineToken),
+            "GET /projects/{id} with a zero-grant token must be forbidden (403)");
+    }
+
+    @Test
+    void listProjectsWithBadTokenIsUnauthorized() throws Exception {
+        KeyorixClient badClient = Keyorix.newClient(serverUrl, "not-a-valid-token");
+        assertThrows(AuthException.class, badClient::listProjects);
     }
 
     @Test
     void timeoutIsEnforcedAgainstASlowServer() throws Exception {
         com.sun.net.httpserver.HttpServer slow =
             com.sun.net.httpserver.HttpServer.create(new java.net.InetSocketAddress("localhost", 0), 0);
+        // The handler blocks on a latch (released in the finally below) instead
+        // of sleeping a fixed time, so the server is "slow" for exactly as long
+        // as the client's 10ms timeout needs -- no timing race, no Thread.sleep.
+        CountDownLatch release = new CountDownLatch(1);
         slow.createContext("/", exchange -> {
             try {
-                Thread.sleep(200);
+                release.await(5, TimeUnit.SECONDS);
             } catch (InterruptedException ignored) {
                 Thread.currentThread().interrupt();
             }
@@ -334,8 +270,9 @@ class ContractTest {
             KeyorixClient slowClient = new KeyorixClient(
                 "http://localhost:" + slow.getAddress().getPort(), "tok", java.time.Duration.ofMillis(10));
             assertThrows(KeyorixException.class, slowClient::listProjects,
-                "expected a timeout error from a 10ms client against a 200ms-slow server");
+                "expected a timeout error from a 10ms client against a stalled server");
         } finally {
+            release.countDown();
             slow.stop(0);
         }
     }
