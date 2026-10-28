@@ -44,7 +44,7 @@ def _post_json(path, body, token=None):
         return e.code, e.read()
 
 
-def _get_status(path, token):
+def _get(path, token):
     req = urllib.request.Request(
         f"{SERVER_URL}{path}",
         headers={"Authorization": f"Bearer {token}"},
@@ -52,9 +52,9 @@ def _get_status(path, token):
     )
     try:
         with urllib.request.urlopen(req, timeout=10) as resp:
-            return resp.status
+            return resp.status, resp.read()
     except urllib.error.HTTPError as e:
-        return e.code
+        return e.code, e.read()
 
 
 def _seed_admin_session():
@@ -184,24 +184,27 @@ class TestContractFullClientSurface(unittest.TestCase):
         except keyorix.KeyorixError as e:
             self.fail(f"Client with a PAT: {e} (expected success -- a PAT presents identically to a session token)")
 
-    def test_machine_token_auth_works_transparently(self):
+    def test_list_projects_succeeds_with_empty_list_for_zero_grant_token(self):
         projects = self.client.list_projects()
         default = next(p for p in projects if p.name == "default")
         machine_token = _create_machine_token(self.token, default.id)
         machine_client = keyorix.Client(SERVER_URL, machine_token)
-        # A brand-new machine identity holds no grants, so since keyorix
-        # #2780 GET /projects answers 200 with an empty list (not 403): the
-        # token is recognized as valid and simply sees nothing.
+        # A brand-new machine identity holds no roles. List routes are
+        # filtered by permission, so it authenticates and gets an EMPTY 200
+        # (not AuthError, not ForbiddenError).
         self.assertEqual(machine_client.list_projects(), [])
 
-        # Proves the same token is authenticated but not authorized: a
-        # project-scoped read of the project it was minted in is 403.
-        status = _get_status(f"/api/v1/projects/{default.id}", machine_token)
-        self.assertEqual(status, 403)
+    def test_get_project_with_zero_grant_token_is_forbidden(self):
+        projects = self.client.list_projects()
+        default = next(p for p in projects if p.name == "default")
+        machine_token = _create_machine_token(self.token, default.id)
+        status, _ = _get(f"/api/v1/projects/{default.id}", machine_token)
+        self.assertEqual(status, 403, "GET /projects/{id} with a zero-grant token must be forbidden (403)")
 
-        # A bad token must still be a 401, not an empty 200.
+    def test_list_projects_with_bad_token_is_unauthorized(self):
+        bad_client = keyorix.Client(SERVER_URL, "not-a-valid-token")
         with self.assertRaises(keyorix.AuthError):
-            keyorix.Client(SERVER_URL, "not-a-real-token").list_projects()
+            bad_client.list_projects()
 
     def test_timeout_is_enforced_against_a_slow_server(self):
         import http.server

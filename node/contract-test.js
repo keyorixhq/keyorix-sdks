@@ -199,25 +199,25 @@ async function runContractTests() {
 
   const machineToken = await createMachineToken(serverUrl, token, defaultProject.id);
   const machineClient = new Client(serverUrl, machineToken);
-  // A brand-new machine identity holds no grants, so since keyorix #2780
-  // GET /projects answers 200 with an empty list (not 403): the token is
-  // recognized as valid and simply sees nothing.
   try {
+    // A brand-new machine identity holds no roles. List routes are filtered by
+    // permission, so it authenticates and gets an EMPTY 200 (not AuthError,
+    // not ForbiddenError).
     const machineProjects = await machineClient.listProjects();
-    assert(Array.isArray(machineProjects) && machineProjects.length === 0, `listProjects() with a fresh machine token succeeds with an empty list — got ${machineProjects.length} projects`);
+    assert(Array.isArray(machineProjects) && machineProjects.length === 0, `listProjects() succeeds with an empty list for a zero-grant token — got ${machineProjects.length} projects`);
   } catch (e) {
-    assert(false, `listProjects() with a fresh machine token should succeed with an empty list — got ${e.constructor.name}: ${e.message}`);
+    assert(false, `listProjects() succeeds with an empty list for a zero-grant token — got ${e.constructor.name}: ${e.message}`);
   }
-  // Proves the same token is authenticated but not authorized: a
-  // project-scoped read of the project it was minted in is 403.
+
   const forbiddenResp = await getJSON(serverUrl, `/api/v1/projects/${defaultProject.id}`, machineToken);
-  assert(forbiddenResp.statusCode === 403, `GET /projects/${defaultProject.id} with a fresh machine token is forbidden — got ${forbiddenResp.statusCode}`);
-  // A bad token must still be a 401, not an empty 200.
+  assert(forbiddenResp.statusCode === 403, `GET /projects/{id} with a zero-grant token is forbidden (403) — got ${forbiddenResp.statusCode}`);
+
+  const badClient = new Client(serverUrl, 'not-a-valid-token');
   try {
-    await new Client(serverUrl, 'not-a-real-token').listProjects();
-    assert(false, 'expected a bad token to be rejected with AuthError');
+    await badClient.listProjects();
+    assert(false, 'expected a bad token to be rejected with AuthError (401)');
   } catch (e) {
-    assert(e instanceof AuthError, `listProjects() with a bad token is an AuthError — got ${e.constructor.name}`);
+    assert(e instanceof AuthError, `listProjects() with a bad token is rejected (401) — got ${e.constructor.name}, want AuthError`);
   }
 
   const slowServer = http.createServer((req, res) => {

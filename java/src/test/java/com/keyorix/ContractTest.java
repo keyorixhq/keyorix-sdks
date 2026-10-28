@@ -8,6 +8,8 @@ import java.net.HttpURLConnection;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
@@ -95,6 +97,15 @@ class ContractTest {
             while ((n = is.read(chunk)) != -1) buf.write(chunk, 0, n);
             if (responseOut != null) responseOut.append(buf.toString(StandardCharsets.UTF_8));
         }
+        conn.disconnect();
+        return status;
+    }
+
+    private static int getStatus(String url, String bearerToken) throws IOException {
+        HttpURLConnection conn = (HttpURLConnection) new URL(url).openConnection();
+        conn.setRequestMethod("GET");
+        conn.setRequestProperty("Authorization", "Bearer " + bearerToken);
+        int status = conn.getResponseCode();
         conn.disconnect();
         return status;
     }
@@ -202,38 +213,35 @@ class ContractTest {
     void patAuthWorksTransparently() throws Exception {
         String pat = createPAT(token, "contract-test-pat");
         KeyorixClient patClient = Keyorix.newClient(serverUrl, pat);
-        try {
-            patClient.listProjects();
-        } catch (KeyorixException e) {
-            fail("Client with a PAT: " + e.getMessage()
-                + " (expected success -- a PAT presents identically to a session token)");
-        }
+        assertDoesNotThrow(() -> { patClient.listProjects(); },
+            "Client with a PAT should succeed -- a PAT presents identically to a session token");
     }
 
     @Test
-    void machineTokenAuthWorksTransparently() throws Exception {
+    void listProjectsSucceedsWithEmptyListForZeroGrantToken() throws Exception {
         Project defaultProject = client.listProjects().stream()
                 .filter(p -> p.getName().equals("default")).findFirst().orElseThrow();
         String machineToken = createMachineToken(token, defaultProject.getId());
         KeyorixClient machineClient = Keyorix.newClient(serverUrl, machineToken);
-        // A brand-new machine identity holds no grants, so since keyorix #2780
-        // GET /projects answers 200 with an empty list (not 403): the token is
-        // recognized as valid and simply sees nothing.
-        assertEquals(0, machineClient.listProjects().size());
+        // A brand-new machine identity holds no roles. List routes are filtered by
+        // permission, so it authenticates and gets an EMPTY 200 (not AuthException,
+        // not ForbiddenException).
+        assertTrue(machineClient.listProjects().isEmpty(),
+            "expected an empty project list for a zero-grant token");
+    }
 
-        // Proves the same token is authenticated but not authorized: a
-        // project-scoped read of the project it was minted in is 403.
-        HttpURLConnection conn = (HttpURLConnection) new URL(
-                serverUrl + "/api/v1/projects/" + defaultProject.getId()).openConnection();
-        conn.setRequestProperty("Authorization", "Bearer " + machineToken);
-        try {
-            assertEquals(403, conn.getResponseCode());
-        } finally {
-            conn.disconnect();
-        }
+    @Test
+    void getProjectWithZeroGrantTokenIsForbidden() throws Exception {
+        Project defaultProject = client.listProjects().stream()
+                .filter(p -> p.getName().equals("default")).findFirst().orElseThrow();
+        String machineToken = createMachineToken(token, defaultProject.getId());
+        assertEquals(403, getStatus(serverUrl + "/api/v1/projects/" + defaultProject.getId(), machineToken),
+            "GET /projects/{id} with a zero-grant token must be forbidden (403)");
+    }
 
-        // A bad token must still be a 401, not an empty 200.
-        KeyorixClient badClient = Keyorix.newClient(serverUrl, "not-a-real-token");
+    @Test
+    void listProjectsWithBadTokenIsUnauthorized() throws Exception {
+        KeyorixClient badClient = Keyorix.newClient(serverUrl, "not-a-valid-token");
         assertThrows(AuthException.class, badClient::listProjects);
     }
 
@@ -241,9 +249,13 @@ class ContractTest {
     void timeoutIsEnforcedAgainstASlowServer() throws Exception {
         com.sun.net.httpserver.HttpServer slow =
             com.sun.net.httpserver.HttpServer.create(new java.net.InetSocketAddress("localhost", 0), 0);
+        // The handler blocks on a latch (released in the finally below) instead
+        // of sleeping a fixed time, so the server is "slow" for exactly as long
+        // as the client's 10ms timeout needs -- no timing race, no Thread.sleep.
+        CountDownLatch release = new CountDownLatch(1);
         slow.createContext("/", exchange -> {
             try {
-                Thread.sleep(200);
+                release.await(5, TimeUnit.SECONDS);
             } catch (InterruptedException ignored) {
                 Thread.currentThread().interrupt();
             }
@@ -258,8 +270,9 @@ class ContractTest {
             KeyorixClient slowClient = new KeyorixClient(
                 "http://localhost:" + slow.getAddress().getPort(), "tok", java.time.Duration.ofMillis(10));
             assertThrows(KeyorixException.class, slowClient::listProjects,
-                "expected a timeout error from a 10ms client against a 200ms-slow server");
+                "expected a timeout error from a 10ms client against a stalled server");
         } finally {
+            release.countDown();
             slow.stop(0);
         }
     }

@@ -109,14 +109,19 @@ expected outcome, not just read from server source:
 | Machine identity token | ✅ | ✅ | ✅ | ✅ |
 | MFA step-up during login | not implemented in any SDK | not implemented in any SDK | not implemented in any SDK | not implemented in any SDK |
 
-A fresh machine identity holds no grants by default — the "machine identity
-token" row verifies the token *authenticates*: since keyorix #2780
-`GET /projects` answers it with `200 {"data":{"projects":[]}}` (an empty list,
-not 403), `GET /projects/{id}` for the project it was minted in is 403, and a
-bad token is still 401/`AuthError`. Together these prove the token is
-recognized as valid, distinct from being authorized for a specific action.
-(Whether `GET /projects` should stay an empty 200 or become a 403 is a
-pending server policy decision; the SDK tests assume the empty 200.) MFA is a real, documented gap (login returns
+A fresh machine identity holds no roles by default — the "machine identity
+token" row verifies the token *authenticates*, which is the correct proof that
+the token is recognized as valid, distinct from being authorized for a
+specific action. The server's rule for a caller with zero grants (decided
+2026-10-17):
+
+- **list routes** (`ListProjects`, ...) are filtered by permission: an empty
+  `200` with no items, not an error;
+- **single-object reads** (`GET /projects/{id}`) are `403` /
+  `ForbiddenError`;
+- **a bad or expired token** is `401` / `AuthError`.
+
+The contract suites in all four SDKs assert all three. MFA is a real, documented gap (login returns
 `mfa_required: true` when an account has TOTP/passkey enrolled; no SDK
 handles that response) — not exercised by the bootstrap-seeded admin used
 in these tests, and out of scope for this pass.

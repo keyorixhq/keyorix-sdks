@@ -126,13 +126,15 @@ class ScopedKeyorixClientTest {
     }
 
     @Test
-    void listSecretsScoped_unknownProject_throws() {
-        assertThrows(KeyorixException.class, () -> client().listSecretsScoped("ghost", "prod"));
+    void listSecretsScoped_unknownProject_throws() throws KeyorixException {
+        KeyorixClient c = client();
+        assertThrows(KeyorixException.class, () -> c.listSecretsScoped("ghost", "prod"));
     }
 
     @Test
-    void listSecretsScoped_unknownEnvironment_throws() {
-        assertThrows(KeyorixException.class, () -> client().listSecretsScoped("proj-a", "ghost"));
+    void listSecretsScoped_unknownEnvironment_throws() throws KeyorixException {
+        KeyorixClient c = client();
+        assertThrows(KeyorixException.class, () -> c.listSecretsScoped("proj-a", "ghost"));
     }
 
     @Test
@@ -156,9 +158,10 @@ class ScopedKeyorixClientTest {
     }
 
     @Test
-    void getSecretScoped_missingName_throwsSecretNotFoundException() {
+    void getSecretScoped_missingName_throwsSecretNotFoundException() throws KeyorixException {
+        KeyorixClient c = client();
         assertThrows(SecretNotFoundException.class,
-            () -> client().getSecretScoped("does-not-exist", "proj-a", "prod"));
+            () -> c.getSecretScoped("does-not-exist", "proj-a", "prod"));
     }
 
     @Test
