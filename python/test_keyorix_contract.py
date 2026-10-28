@@ -176,6 +176,33 @@ class TestContractFullClientSurface(unittest.TestCase):
         value = self.client.get_secret_scoped(secret_name, default.id, dev_env.id)
         self.assertEqual(value, secret_value)
 
+    def test_deleted_secret_exposes_purge_at(self):
+        projects = self.client.list_projects()
+        default = next(p for p in projects if p.name == "default")
+        envs = self.client.list_environments(default.id)
+        dev_env = next(e for e in envs if e.name == "development")
+
+        name = f"contract-purge-{time.time_ns()}"
+        _seed_secret(self.token, default.id, dev_env.id, name, "v")
+        live = next(s for s in self.client.list_secrets_scoped(default.id, dev_env.id) if s.name == name)
+        self.assertEqual(live.purge_at, "", "a live secret has no purge_at")
+
+        # DELETE is not part of this SDK's public surface: raw HTTP.
+        req = urllib.request.Request(
+            f"{SERVER_URL}/api/v1/secrets/{live.id}", headers={"Authorization": f"Bearer {self.token}"}, method="DELETE"
+        )
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            self.assertEqual(resp.status, 204)
+
+        deleted = next((s for s in self.client.list_deleted_secrets(default.id) if s.id == live.id), None)
+        self.assertIsNotNone(deleted, "soft-deleted secret missing from list_deleted_secrets")
+        self.assertTrue(deleted.purge_at, "soft-deleted secret has no purge_at")
+        import datetime
+
+        purge = datetime.datetime.fromisoformat(deleted.purge_at.replace("Z", "+00:00"))
+        days = (purge - datetime.datetime.now(datetime.timezone.utc)).total_seconds() / 86400
+        self.assertTrue(29 < days < 31, f"purge_at {deleted.purge_at} is not ~30 days out (retention_days=30)")
+
     def test_pat_auth_works_transparently(self):
         pat = _create_pat(self.token, "contract-test-pat")
         pat_client = keyorix.Client(SERVER_URL, pat)

@@ -210,6 +210,33 @@ class ContractTest {
     }
 
     @Test
+    void deletedSecretExposesPurgeAt() throws Exception {
+        Project defaultProject = client.listProjects().stream()
+                .filter(p -> p.getName().equals("default")).findFirst().orElseThrow();
+        Environment devEnv = client.listEnvironments(defaultProject.getId()).stream()
+                .filter(e -> e.getName().equals("development")).findFirst().orElseThrow();
+        String name = "contract-purge-" + System.nanoTime();
+        seedSecret(defaultProject.getId(), devEnv.getId(), name, "v");
+        Secret live = client.listSecretsScoped(defaultProject.getId(), devEnv.getId()).stream()
+                .filter(s -> s.getName().equals(name)).findFirst().orElseThrow();
+        assertEquals("", live.getPurgeAt(), "a live secret has no purgeAt");
+
+        // DELETE is not part of this SDK's public surface: raw HTTP.
+        HttpURLConnection conn = (HttpURLConnection) new URL(serverUrl + "/api/v1/secrets/" + live.getId()).openConnection();
+        conn.setRequestMethod("DELETE");
+        conn.setRequestProperty("Authorization", "Bearer " + token);
+        assertEquals(204, conn.getResponseCode());
+        conn.disconnect();
+
+        Secret deleted = client.listDeletedSecrets(defaultProject.getId()).stream()
+                .filter(s -> s.getId() == live.getId()).findFirst().orElse(null);
+        assertNotNull(deleted, "soft-deleted secret missing from listDeletedSecrets");
+        assertFalse(deleted.getPurgeAt().isEmpty(), "soft-deleted secret has no purgeAt");
+        double days = java.time.Duration.between(java.time.Instant.now(), java.time.Instant.parse(deleted.getPurgeAt())).toSeconds() / 86400.0;
+        assertTrue(days > 29 && days < 31, "purgeAt " + deleted.getPurgeAt() + " is not ~30 days out (retention_days=30)");
+    }
+
+    @Test
     void patAuthWorksTransparently() throws Exception {
         String pat = createPAT(token, "contract-test-pat");
         KeyorixClient patClient = Keyorix.newClient(serverUrl, pat);

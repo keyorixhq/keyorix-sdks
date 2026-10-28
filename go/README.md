@@ -118,6 +118,12 @@ want to cache) project/environment IDs: `GetSecretScoped` costs up to two extra
 round trips to resolve a name-based `ProjectRef`/`EnvironmentRef` the first time,
 and needs project/environment-list permission to do so.
 
+### `client.ListDeletedSecrets(ctx, project ProjectRef) ([]Secret, error)`
+Lists a project's soft-deleted (recycle-bin) secrets, newest deleted first.
+Each has `PurgeAt` (`*time.Time`) set: the restore deadline, before which the
+server will not hard-delete it. `PurgeAt` is nil on live secrets. Needs server
+v0.96.0+.
+
 ### `client.ListSecretsScoped(ctx, project ProjectRef, environment EnvironmentRef) ([]Secret, error)`
 Returns every secret within one project's environment, following every page
 the server reports.

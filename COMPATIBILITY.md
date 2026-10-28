@@ -32,6 +32,20 @@ weren't tested.
 |---|---|---|---|---|
 | 0.3.0 (go/node/python/java, unreleased) | `main` | `60cb69e2` | 2026-09-25 | Green — full contract suite (see table below) |
 | 0.3.0 (go/node/python/java, unreleased) | `main` | `c5be894d` | 2026-09-28 | Green, after landing keyorixhq/keyorix-sdks#39-#41 (see Session K report) — see "What changed" below |
+| unreleased + MFA error + `purgeAt` (go/node/python/java) | `main` | - | - | `purgeAt` contract test runs in CI against the SQLite contract server (`security.require_mfa: false`); the MFA login error is covered by mock-server unit tests, not the contract suites |
+
+### Minimum server version
+
+| Feature | Minimum keyorix server |
+|---|---|
+| Everything in the 0.3.0 rows above | as before (not re-derived here) |
+| `MFARequiredError`/`verify_mfa` — the `POST /auth/login` → `mfa_required` + `mfa_challenge`, `POST /auth/mfa/verify` flow (TOTP and recovery codes) | v0.4.0 (ADR-034). The `totp_available`/`webauthn_available` flags are read as false when an older server omits them. |
+| `purgeAt` / `listDeletedSecrets` (`GET /api/v1/projects/{id}/secrets/deleted`, `purge_at`) | v0.96.0 (keyorix #3021, RETENTION-1). On an older server the call fails with the server's own 404/403 and `purgeAt` stays empty. |
+
+The MFA tag floor comes from `git tag --contains` of the commit that added
+`server/http/handlers/mfa.go`; the `purgeAt` floor from the same check on
+#3021. Neither is exercised against those old releases by CI (the contract job
+builds `main`).
 
 No `vX.Y.Z` tag has been cut for this repo yet (see BACKLOG.md and the
 NEEDS ANDREI at the end of this file); the rows above reflect the
@@ -72,13 +86,15 @@ a real, live break found and fixed in between (Session K, this repo's PRs
 
 | Endpoint | Go | Node | Python | Java |
 |---|---|---|---|---|
-| `POST /auth/login` | ✅ | ✅ | ✅ | ✅ |
+| `POST /auth/login` (incl. the `mfa_required` response → typed MFA error) | ✅ | ✅ | ✅ | ✅ |
+| `POST /auth/mfa/verify` (TOTP / recovery code) | ✅ | ✅ | ✅ | ✅ |
 | `GET /health` | ✅ | ✅ | ✅ | ✅ |
 | `GET /api/v1/projects` | ✅ | ✅ | ✅ | ✅ |
 | `POST /api/v1/projects` (create) | ✅ | ✅ | ✅ | ❌ not implemented |
 | `GET /api/v1/projects/{id}/environments` | ✅ | ✅ | ✅ | ✅ |
 | `GET /api/v1/secrets` (list, scoped) | ✅ | ✅ | ✅ | ✅ |
 | `GET /api/v1/secrets/{id}?include_value=true` | ✅ | ✅ | ✅ | ✅ |
+| `GET /api/v1/projects/{id}/secrets/deleted` (`purge_at`) | ✅ | ✅ | ✅ | ✅ |
 
 The Java SDK's missing `createProject` is a real feature gap versus the
 other three (found during the SDKS track's 2026-09-25 inventory, not a
@@ -87,7 +103,7 @@ functionality, not a fix to something broken. See the `keyorix` repo's
 `~/proj/prompts/reports/SDKS.md` track report for the full inventory this
 table summarizes.
 
-This repo calls 7 of `server/http/handlers/openapi.yaml`'s 126+ documented
+This repo calls 9 of `server/http/handlers/openapi.yaml`'s 126+ documented
 paths (ADR-072 recorded a 4/126 baseline in 2026-08-04 before
 `ListProjects`/`CreateProject`/`ListEnvironments` were added). Generating
 SDK clients directly from the OpenAPI spec — ADR-072's own recorded
@@ -107,7 +123,8 @@ expected outcome, not just read from server source:
 | Session token (from `login`/`Login`) | ✅ | ✅ | ✅ | ✅ |
 | Personal access token (PAT) | ✅ | ✅ | ✅ | ✅ |
 | Machine identity token | ✅ | ✅ | ✅ | ✅ |
-| MFA step-up during login | not implemented in any SDK | not implemented in any SDK | not implemented in any SDK | not implemented in any SDK |
+| MFA (TOTP / recovery code) second step during login | ✅ `*MFARequiredError` + `VerifyMFA` | ✅ `MFARequiredError` + `verifyMfa` / `login(.., { mfaCode })` | ✅ `MFARequiredError` + `verify_mfa` / `login(.., mfa_code=)` | ✅ `MFARequiredException` + `verifyMfa` / `login(.., mfaCode)` |
+| Passkey (WebAuthn) second factor | not supported | not supported | not supported | not supported |
 
 A fresh machine identity holds no roles by default — the "machine identity
 token" row verifies the token *authenticates*, which is the correct proof that
@@ -121,10 +138,20 @@ specific action. The server's rule for a caller with zero grants (decided
   `ForbiddenError`;
 - **a bad or expired token** is `401` / `AuthError`.
 
-The contract suites in all four SDKs assert all three. MFA is a real, documented gap (login returns
-`mfa_required: true` when an account has TOTP/passkey enrolled; no SDK
-handles that response) — not exercised by the bootstrap-seeded admin used
-in these tests, and out of scope for this pass.
+The contract suites in all four SDKs assert all three.
+
+Login returns `mfa_required: true` plus a single-use `mfa_challenge` when an
+account has TOTP/passkey enrolled; every SDK now surfaces that as a typed error
+carrying the challenge (previously Go reported "no token in login response" and
+the others a generic auth error) and completes it with a TOTP or recovery code.
+The CI contract server runs with `security.require_mfa: false`, so the contract
+suites do not exercise MFA login; the typed error and the verify step are
+covered by mock-server unit tests in each SDK. Passkey accounts get the typed
+error with `webauthnAvailable` set, but the passkey ceremony itself is not
+implemented. The server confines a session that still owes MFA enrolment
+(`security.require_mfa`, on by default since ADR-112) to the enrolment endpoints
+with `403 MFAEnrollmentRequired`; that is a different state from an enrolled
+account's login challenge, and the SDKs map it to `ForbiddenError` as before.
 
 ## Release status
 

@@ -188,6 +188,24 @@ async function runContractTests() {
   const value = await client.getSecretScoped(secretName, defaultProject.id, devEnv.id);
   assert(value === secretValue, `getSecretScoped() round-trips the secret value — got ${JSON.stringify(value)}`);
 
+  // purgeAt on a soft-deleted secret (DELETE is not part of this SDK's public surface: raw HTTP).
+  const purgeName = `contract-purge-${Date.now()}`;
+  await seedSecret(serverUrl, token, defaultProject.id, devEnv.id, purgeName, 'v');
+  const liveForPurge = (await client.listSecretsScoped(defaultProject.id, devEnv.id)).find((s) => s.name === purgeName);
+  assert(liveForPurge && liveForPurge.purgeAt === undefined, 'a live secret has no purgeAt');
+  const delStatus = await new Promise((resolve, reject) => {
+    const r = http.request(new URL(`/api/v1/secrets/${liveForPurge.id}`, serverUrl), { method: 'DELETE', headers: { Authorization: `Bearer ${token}` } }, (res) => {
+      res.resume();
+      res.on('end', () => resolve(res.statusCode));
+    });
+    r.on('error', reject);
+    r.end();
+  });
+  assert(delStatus === 204, `DELETE /api/v1/secrets/{id} soft-deletes — got ${delStatus}`);
+  const deletedEntry = (await client.listDeletedSecrets(defaultProject.id)).find((s) => s.id === liveForPurge.id);
+  const purgeDays = deletedEntry && (Date.parse(deletedEntry.purgeAt) - Date.now()) / 86400000;
+  assert(purgeDays > 29 && purgeDays < 31, `listDeletedSecrets() exposes purgeAt ~30 days out — got ${deletedEntry && deletedEntry.purgeAt}`);
+
   const pat = await createPAT(serverUrl, token, 'contract-test-pat');
   const patClient = new Client(serverUrl, pat);
   try {

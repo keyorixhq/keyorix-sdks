@@ -5,6 +5,8 @@ export interface Secret {
   projectId: number;
   environment: string;
   createdAt: string;
+  /** Restore deadline (RFC 3339 UTC) of a soft-deleted secret; set by listDeletedSecrets. */
+  purgeAt?: string;
 }
 
 export interface Project {
@@ -74,6 +76,7 @@ export declare class Client {
   /** @deprecated Removed in v0.3.0 — always throws. Use getSecretScoped. */
   getSecret(name: string, environment?: string): Promise<string>;
   listSecretsScoped(project: string | number, environment: string | number): Promise<Secret[]>;
+  listDeletedSecrets(project: string | number): Promise<Secret[]>;
   getSecretScoped(name: string, project: string | number, environment: string | number): Promise<string>;
   getSecretIn(project: string, environment: string, name: string): Promise<string>;
   getSecretByRef(ref: string): Promise<string>;
