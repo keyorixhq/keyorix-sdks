@@ -240,7 +240,7 @@ class ContractTest {
     void patAuthWorksTransparently() throws Exception {
         String pat = createPAT(token, "contract-test-pat");
         KeyorixClient patClient = Keyorix.newClient(serverUrl, pat);
-        assertDoesNotThrow(() -> { patClient.listProjects(); },
+        assertDoesNotThrow(patClient::listProjects,
             "Client with a PAT should succeed -- a PAT presents identically to a session token");
     }
 

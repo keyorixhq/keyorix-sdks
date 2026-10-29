@@ -18,7 +18,13 @@ import java.time.Duration;
  */
 public final class Keyorix {
 
+    // Fixed routes of the Keyorix server's HTTP API (part of the wire contract,
+    // not deployment configuration; the deployment-specific part is the
+    // caller-supplied serverUrl). java:S1075 expects hardcoded URIs to be
+    // configurable, which would only let a misconfiguration break every login.
+    @SuppressWarnings("java:S1075")
     private static final String LOGIN_PATH = "/auth/login";
+    @SuppressWarnings("java:S1075")
     private static final String VERIFY_MFA_PATH = "/auth/mfa/verify";
 
     private Keyorix() {}
