@@ -3,8 +3,9 @@
 All four SDKs in this repo (`go/`, `node/`, `python/`, `java/`) release
 together at one `vX.Y.Z` tag and cover the same server API surface: login,
 health, `ListProjects`/`CreateProject`, `ListEnvironments`,
-`ListSecretsScoped`/`GetSecretScoped` (read-only for secret values — none of
-the four SDKs can create/update/delete a secret). See each language's own
+`ListSecretsScoped`/`GetSecretScoped`, and `CreateSecret` (create a secret in a
+project+environment). None of the four SDKs can update or delete a secret yet.
+See each language's own
 README `## API` section for its exact method signatures, and ADR-072 in the
 [`keyorix`](https://github.com/keyorixhq/keyorix) repo for why the four are
 consolidated here.
@@ -21,8 +22,11 @@ SDK's contract test suite against it —
 `python/test_keyorix_contract.py`,
 `java/src/test/java/com/keyorix/ContractTest.java`. Each covers the SDK's
 full public surface: health, list/create project, list environments,
-list/get a secret's value — against a freshly self-bootstrapped server, not
-a shared fixture. A row below is "known-compatible" only for a version pair
+list/get/create a secret — against a freshly self-bootstrapped server, not
+a shared fixture. The create-secret case creates a secret, reads its value
+back through the SDK, and checks the two failures: a duplicate name is the
+typed already-exists error and an unauthenticated call is the typed auth
+error. A row below is "known-compatible" only for a version pair
 where that suite was actually green; it is not a promise about versions that
 weren't tested.
 
@@ -33,6 +37,7 @@ weren't tested.
 | 0.3.0 (go/node/python/java, unreleased) | `main` | `60cb69e2` | 2026-09-25 | Green — full contract suite (see table below) |
 | 0.3.0 (go/node/python/java, unreleased) | `main` | `c5be894d` | 2026-09-28 | Green, after landing keyorixhq/keyorix-sdks#39-#41 (see Session K report) — see "What changed" below |
 | unreleased + MFA error + `purgeAt` (go/node/python/java) | `main` | - | - | `purgeAt` contract test runs in CI against the SQLite contract server (`security.require_mfa: false`); the MFA login error is covered by mock-server unit tests, not the contract suites |
+| unreleased + `CreateSecret` + Java `createProject` (go/node/python/java) | `main` | `1b48feb85` | 2026-10-30 | Green locally against a server built natively from that commit (SQLite, `security.require_mfa: false`, the CI contract config): Go, Node and Python through their own runners, Java's `ContractTest` through the JUnit launcher (Maven Central is not reachable from the sandbox that ran it). CI's contract job is the authoritative run. |
 
 ### Minimum server version
 
@@ -93,6 +98,7 @@ a real, live break found and fixed in between (Session K, this repo's PRs
 | `POST /api/v1/projects` (create) | ✅ | ✅ | ✅ | ✅ |
 | `GET /api/v1/projects/{id}/environments` | ✅ | ✅ | ✅ | ✅ |
 | `GET /api/v1/secrets` (list, scoped) | ✅ | ✅ | ✅ | ✅ |
+| `POST /api/v1/secrets` (create; duplicate name → typed already-exists error) | ✅ | ✅ | ✅ | ✅ |
 | `GET /api/v1/secrets/{id}?include_value=true` | ✅ | ✅ | ✅ | ✅ |
 | `GET /api/v1/projects/{id}/secrets/deleted` (`purge_at`) | ✅ | ✅ | ✅ | ✅ |
 
@@ -101,9 +107,12 @@ The SDKS track's 2026-09-25 inventory (see the `keyorix` repo's
 `createProject`; it was added afterwards, so all four languages now cover the
 same endpoints.
 
-This repo calls 9 of `server/http/handlers/openapi.yaml`'s 126+ documented
-paths (ADR-072 recorded a 4/126 baseline in 2026-08-04 before
-`ListProjects`/`CreateProject`/`ListEnvironments` were added). Generating
+This repo calls 9 of `server/http/handlers/openapi.yaml`'s 246 documented
+paths (counted on keyorix `main` at `1b48feb85`, 2026-10-30; ADR-072 recorded a
+4/126 baseline in 2026-08-04 before `ListProjects`/`CreateProject`/
+`ListEnvironments` were added). `POST /api/v1/secrets` shares its path with the
+already-counted list call, so adding create-secret raised the operations
+covered (to 11) but not the path count. Generating
 SDK clients directly from the OpenAPI spec — ADR-072's own recorded
 follow-on — would close this gap in one step rather than hand-adding
 endpoints one at a time; not done here.
