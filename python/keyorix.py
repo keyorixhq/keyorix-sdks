@@ -155,6 +155,28 @@ class SecretUnavailableError(KeyorixError):
     pass
 
 
+CODE_CONFLICT = "ConflictError"
+
+
+class SecretAlreadyExistsError(KeyorixError):
+    """Raised by create_secret when a live secret of that name already exists
+    in the project+environment (HTTP 409, code ``ConflictError``). Carries no
+    secret value.
+    """
+
+    pass
+
+
+def _redact_value(body: str, value: str) -> str:
+    """Remove every occurrence of ``value`` (raw and JSON-escaped) from a
+    response body, so a server that echoes request content into an error
+    cannot put the secret into ``KeyorixError.response_body``."""
+    if not value:
+        return body
+    escaped = json.dumps(value)[1:-1]
+    return body.replace(value, "[REDACTED]").replace(escaped, "[REDACTED]")
+
+
 def _error_code(body: str) -> Optional[str]:
     try:
         parsed = json.loads(body)
@@ -478,6 +500,75 @@ class Client:
         for s in secrets:
             s.project_id = project_id
         return secrets
+
+    def create_secret(
+        self,
+        project: Union[str, int],
+        environment: Union[str, int],
+        name: str,
+        value: str,
+        *,
+        type: str = "generic",
+        description: str = "",
+    ) -> Secret:
+        """Create the secret `name` with `value` within one project's
+        environment (POST /api/v1/secrets) and return its metadata -- never
+        the value. Needs secrets.write in the scope.
+
+        Args:
+            project: Project name or numeric ID (see list_secrets_scoped)
+            environment: Environment name or numeric ID (see list_secrets_scoped)
+            name: Secret name
+            value: The secret value. Never included in an exception message,
+                and stripped from ``response_body`` if the server echoes it.
+            type: Secret type (default "generic")
+            description: Optional free-text note (metadata only)
+
+        Raises:
+            SecretAlreadyExistsError: the name is already taken in the scope (409)
+            AuthError: the token is missing or invalid (401)
+            ForbiddenError: the token lacks permission (403)
+            KeyorixError: any other error
+        """
+        project_id = self._resolve_project(project)
+        env_id = self._resolve_environment(project_id, environment)
+        payload = {
+            "name": name,
+            "value": value,
+            "project_id": project_id,
+            "environment_id": env_id,
+            "type": type,
+        }
+        if description:
+            payload["description"] = description
+        req = urllib.request.Request(
+            f"{self._base}/api/v1/secrets",
+            data=json.dumps(payload).encode(),
+            headers={
+                "Authorization": f"Bearer {self._token}",
+                "Content-Type": "application/json",
+            },
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=self._timeout, context=self._ssl_context) as resp:
+                data = json.loads(resp.read())
+            return Secret._from_dict(data.get("data", {}))
+        except urllib.error.HTTPError as e:
+            body = _redact_value(e.read().decode(errors="replace"), value)
+            err = _error_for_response(e.code, body)
+            if e.code == 409 and err.code == CODE_CONFLICT:
+                raise SecretAlreadyExistsError(
+                    "A secret with this name already exists in the project and environment",
+                    status_code=e.code,
+                    response_body=body,
+                    code=err.code,
+                ) from None
+            raise err from None
+        except urllib.error.URLError as e:
+            raise KeyorixError(f"Request failed: {e.reason}") from e
+        except TimeoutError as e:
+            raise KeyorixError(f"Request timed out: {e}") from e
 
     def get_secret_in(self, project: str, environment: str, name: str) -> str:
         """Get the value of secret `name` within `project`/`environment`, all

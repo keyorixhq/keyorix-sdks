@@ -89,6 +89,13 @@ String dbPassword = client.getSecretIn("my-project", "production", "db-password"
 - client.listDeletedSecrets(projectId) -> List<Secret> — the project's
   soft-deleted secrets; `secret.getPurgeAt()` is the restore deadline (RFC 3339
   UTC; empty on live secrets). Needs server v0.96.0+.
+- client.createSecret(project, environment, name, value) -> Secret — creates a
+  secret (`POST /api/v1/secrets`) and returns its metadata, never the value. The
+  overload `createSecret(project, environment, name, value, type, description)`
+  sets the type (default `generic`) and a free-text note (`null` for none).
+  Needs `secrets.write` in the scope. A name already taken in the scope throws
+  `SecretAlreadyExistsException`. The value never appears in an exception
+  message, and any echo of it by the server is stripped from `getResponseBody()`.
 - client.health() -> boolean
 
 `project`/`environment` each have two overloads: by name (`String`, resolved to
@@ -115,6 +122,7 @@ contacting the server — use `getSecretScoped`/`listSecretsScoped` instead.
 - NotFoundException — resource not found (HTTP 404), which is what
   `getSecretIn`/`getSecretByRef` throw for a missing secret, project or environment
 - SecretNotFoundException — thrown by `getSecretScoped` when no secret in the scope has that name
+- SecretAlreadyExistsException — thrown by `createSecret` when the name is already taken in the scope (HTTP 409)
 - AmbiguousSecretException — secret name matched more than one secret in scope (`getIds()`)
 
 ## Requirements
