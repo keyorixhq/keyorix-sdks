@@ -22,7 +22,7 @@
 // Skipped unless KEYORIX_CONTRACT_SERVER_URL is set.
 
 const http = require('node:http');
-const { Client, login, AuthError } = require('./keyorix');
+const { Client, login, AuthError, SecretAlreadyExistsError } = require('./keyorix');
 
 let passed = 0;
 let failed = 0;
@@ -205,6 +205,34 @@ async function runContractTests() {
   const deletedEntry = (await client.listDeletedSecrets(defaultProject.id)).find((s) => s.id === liveForPurge.id);
   const purgeDays = deletedEntry && (Date.parse(deletedEntry.purgeAt) - Date.now()) / 86400000;
   assert(purgeDays > 29 && purgeDays < 31, `listDeletedSecrets() exposes purgeAt ~30 days out — got ${deletedEntry && deletedEntry.purgeAt}`);
+
+  // createSecret: create by name, read back through the SDK's getters, then the
+  // two negative cases (duplicate name, unauthenticated).
+  const createdName = `contract-create-${Date.now()}`;
+  const createdValue = 'contract-create-value-do-not-use';
+  const createdSecret = await client.createSecret('default', 'development', createdName, createdValue, {
+    description: 'created by the Node SDK contract test',
+  });
+  assert(createdSecret.id > 0 && createdSecret.name === createdName && createdSecret.type === 'generic', 'createSecret() returns the created node');
+  assert(createdSecret.projectId === defaultProject.id && createdSecret.environmentId === devEnv.id, 'createSecret() node carries the resolved project/environment IDs');
+  assert((await client.getSecretScoped(createdName, 'default', 'development')) === createdValue, 'createSecret() value reads back through getSecretScoped()');
+  assert((await client.listSecretsScoped('default', 'development')).some((s) => s.id === createdSecret.id), 'createSecret() secret appears in listSecretsScoped()');
+  try {
+    await client.createSecret('default', 'development', createdName, createdValue);
+    assert(false, 'a duplicate createSecret() should be rejected');
+  } catch (e) {
+    assert(e instanceof SecretAlreadyExistsError, `duplicate createSecret() is SecretAlreadyExistsError — got ${e.constructor.name}`);
+    assert(e.statusCode === 409 && !e.message.includes(createdValue) && !String(e.responseBody).includes(createdValue), 'duplicate createSecret() error is 409 and never echoes the value');
+  }
+  for (const badToken of ['not-a-valid-token', '']) {
+    try {
+      // By ID, so the 401 comes from POST /api/v1/secrets itself, not a project lookup.
+      await new Client(serverUrl, badToken).createSecret(defaultProject.id, devEnv.id, `${createdName}-anon`, createdValue);
+      assert(false, `unauthenticated createSecret() (token '${badToken}') should be rejected`);
+    } catch (e) {
+      assert(e instanceof AuthError, `unauthenticated createSecret() (token '${badToken}') is AuthError — got ${e.constructor.name}`);
+    }
+  }
 
   const pat = await createPAT(serverUrl, token, 'contract-test-pat');
   const patClient = new Client(serverUrl, pat);
