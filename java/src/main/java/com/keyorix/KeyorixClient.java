@@ -410,6 +410,25 @@ public class KeyorixClient {
     }
 
     /**
+     * Creates a new project (and seeds its default environments) via
+     * {@code POST /api/v1/projects}.
+     *
+     * @param name        project name
+     * @param description optional free-text description; may be null
+     * @return the created project
+     * @throws KeyorixException if an API error occurs
+     */
+    public Project createProject(String name, String description) throws KeyorixException {
+        String body = "{\"name\":" + JsonParser.quote(name)
+            + ",\"description\":" + JsonParser.quote(description == null ? "" : description) + "}";
+        Project created = JsonParser.parseCreatedProject(post(PROJECTS_PATH, body, null));
+        if (created == null) {
+            throw new KeyorixException("Failed to parse create-project response");
+        }
+        return created;
+    }
+
+    /**
      * Lists all environments for a project.
      *
      * @throws KeyorixException if an API error occurs

@@ -89,6 +89,10 @@ String dbPassword = client.getSecretIn("my-project", "production", "db-password"
 - client.listDeletedSecrets(projectId) -> List<Secret> — the project's
   soft-deleted secrets; `secret.getPurgeAt()` is the restore deadline (RFC 3339
   UTC; empty on live secrets). Needs server v0.96.0+.
+- client.createProject(name, description) -> Project — creates a project
+  (`POST /api/v1/projects`) and seeds its default environments; `description`
+  may be `null`. Same behaviour as `CreateProject`/`createProject`/`create_project`
+  in the Go, Node and Python SDKs.
 - client.createSecret(project, environment, name, value) -> Secret — creates a
   secret (`POST /api/v1/secrets`) and returns its metadata, never the value. The
   overload `createSecret(project, environment, name, value, type, description)`
@@ -134,8 +138,7 @@ Java 11+, zero external dependencies, Keyorix server v0.1.0+
 See [`../COMPATIBILITY.md`](../COMPATIBILITY.md) for the current
 known-compatible server versions and per-endpoint coverage — verified by
 [`../.github/workflows/contract.yml`](../.github/workflows/contract.yml)
-against a real keyorix-server, not asserted by hand. Note: this SDK does not
-yet implement `createProject` (unlike the other three languages here).
+against a real keyorix-server, not asserted by hand.
 
 ## License
 

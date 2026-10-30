@@ -61,6 +61,11 @@ class JsonParser {
         return parseSecret(json);
     }
 
+    /** Parse one created project from: {"data":{"id":..,"name":..,"description":..}} */
+    static Project parseCreatedProject(String json) {
+        return parseProject(json);
+    }
+
     /** Quotes s as a JSON string literal, escaping quotes, backslashes and control characters. */
     static String quote(String s) {
         StringBuilder sb = new StringBuilder(s.length() + 2).append('"');

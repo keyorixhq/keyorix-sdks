@@ -90,18 +90,16 @@ a real, live break found and fixed in between (Session K, this repo's PRs
 | `POST /auth/mfa/verify` (TOTP / recovery code) | ✅ | ✅ | ✅ | ✅ |
 | `GET /health` | ✅ | ✅ | ✅ | ✅ |
 | `GET /api/v1/projects` | ✅ | ✅ | ✅ | ✅ |
-| `POST /api/v1/projects` (create) | ✅ | ✅ | ✅ | ❌ not implemented |
+| `POST /api/v1/projects` (create) | ✅ | ✅ | ✅ | ✅ |
 | `GET /api/v1/projects/{id}/environments` | ✅ | ✅ | ✅ | ✅ |
 | `GET /api/v1/secrets` (list, scoped) | ✅ | ✅ | ✅ | ✅ |
 | `GET /api/v1/secrets/{id}?include_value=true` | ✅ | ✅ | ✅ | ✅ |
 | `GET /api/v1/projects/{id}/secrets/deleted` (`purge_at`) | ✅ | ✅ | ✅ | ✅ |
 
-The Java SDK's missing `createProject` is a real feature gap versus the
-other three (found during the SDKS track's 2026-09-25 inventory, not a
-defect in existing code) — out of scope to add here since it's new
-functionality, not a fix to something broken. See the `keyorix` repo's
-`~/proj/prompts/reports/SDKS.md` track report for the full inventory this
-table summarizes.
+The SDKS track's 2026-09-25 inventory (see the `keyorix` repo's
+`~/proj/prompts/reports/SDKS.md` track report) found Java without
+`createProject`; it was added afterwards, so all four languages now cover the
+same endpoints.
 
 This repo calls 9 of `server/http/handlers/openapi.yaml`'s 126+ documented
 paths (ADR-072 recorded a 4/126 baseline in 2026-08-04 before
