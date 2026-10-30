@@ -114,6 +114,26 @@ class SecretUnavailableError extends KeyorixError {
   }
 }
 
+// Thrown by createSecret when a live secret of that name already exists in the
+// project+environment (HTTP 409, errorCode 'ConflictError'). Carries no value.
+class SecretAlreadyExistsError extends KeyorixError {
+  constructor(message, opts) {
+    super(message, opts);
+    this.name = 'SecretAlreadyExistsError';
+  }
+}
+
+const CODE_CONFLICT = 'ConflictError';
+
+// Removes every occurrence of value (raw and JSON-escaped) from a response
+// body, so a server that echoes request content into an error cannot put the
+// secret into KeyorixError.responseBody.
+function redactValue(body, value) {
+  if (!value || typeof body !== 'string') return body;
+  const escaped = JSON.stringify(value).slice(1, -1);
+  return body.split(value).join('[REDACTED]').split(escaped).join('[REDACTED]');
+}
+
 // Stable error codes the server sends when a secret's own state refuses a value
 // read. A read outside the access schedule is a 403 (ForbiddenError with this
 // errorCode); the other three are a 409 (SecretUnavailableError).
@@ -446,6 +466,65 @@ class Client {
   }
 
   /**
+   * Create the secret `name` with `value` within one project's environment
+   * (POST /api/v1/secrets) and return its metadata -- never the value.
+   * @param {string|number} project - See listSecretsScoped.
+   * @param {string|number} environment - See listSecretsScoped.
+   * @param {string} name
+   * @param {string} value - The secret value. Never included in an error
+   *   message, and stripped from `responseBody` if the server echoes it.
+   * @param {object} [opts]
+   * @param {string} [opts.type='generic'] - Secret type
+   * @param {string} [opts.description] - Free-text note (metadata only)
+   * @returns {Promise<{id: number, name: string, type: string, projectId: number, environmentId: number}>}
+   * @throws {SecretAlreadyExistsError} if the name is already taken in the scope (409)
+   * @throws {AuthError} 401; {ForbiddenError} 403 (needs secrets.write in scope)
+   */
+  async createSecret(project, environment, name, value, opts = {}) {
+    const projectId = await this._resolveProject(project);
+    const envId = await this._resolveEnvironment(projectId, environment);
+    const payload = {
+      name,
+      value,
+      project_id: projectId,
+      environment_id: envId,
+      type: opts.type || 'generic',
+    };
+    if (opts.description) payload.description = opts.description;
+    const body = JSON.stringify(payload);
+    const options = {
+      ...this._parsed,
+      path: '/api/v1/secrets',
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${this._token}`,
+        'Content-Type': 'application/json',
+        'Content-Length': Buffer.byteLength(body),
+      },
+      timeout: this._timeout,
+    };
+    let resp;
+    try {
+      resp = await request(options, body);
+    } catch (err) {
+      throw new KeyorixError(`Request failed: ${err.message}`);
+    }
+    if (resp.status !== 200 && resp.status !== 201) {
+      const err = errorForResponse(resp.status, redactValue(resp.body, value));
+      if (resp.status === 409 && err.errorCode === CODE_CONFLICT) {
+        throw new SecretAlreadyExistsError('A secret with this name already exists in the project and environment', {
+          statusCode: err.statusCode,
+          responseBody: err.responseBody,
+          errorCode: err.errorCode,
+        });
+      }
+      throw err;
+    }
+    const s = JSON.parse(resp.body)?.data || {};
+    return { id: s.id, name: s.name, type: s.type, projectId: s.project_id, environmentId: s.environment_id };
+  }
+
+  /**
    * Get the value of secret `name` within `project`/`environment`, all by
    * name, via a single server-authorized round trip -- a thin wrapper
    * around getSecretByRef. Unlike getSecretScoped, this needs no
@@ -622,5 +701,6 @@ module.exports = {
   NotFoundError,
   SecretUnavailableError,
   SecretNotFoundError,
+  SecretAlreadyExistsError,
   AmbiguousSecretError,
 };

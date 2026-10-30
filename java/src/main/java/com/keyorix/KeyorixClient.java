@@ -3,6 +3,7 @@ package com.keyorix;
 import java.io.FileInputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.OutputStream;
 import java.net.HttpURLConnection;
 import java.net.URI;
 import java.net.URISyntaxException;
@@ -289,6 +290,75 @@ public class KeyorixClient {
     }
 
     /**
+     * Creates the secret {@code name} with {@code value} (type {@code generic})
+     * within projectName's environmentName and returns its metadata, never the
+     * value. See {@link #createSecret(long, long, String, String, String, String)}.
+     *
+     * @throws SecretAlreadyExistsException if the name is already taken in the scope
+     * @throws KeyorixException             if an API error occurs
+     */
+    public Secret createSecret(String projectName, String environmentName, String name, String value)
+            throws KeyorixException {
+        return createSecret(projectName, environmentName, name, value, "generic", null);
+    }
+
+    /**
+     * Creates a secret within projectName's environmentName, resolving both
+     * names to IDs first (cached on this client). See
+     * {@link #createSecret(long, long, String, String, String, String)}.
+     */
+    public Secret createSecret(String projectName, String environmentName, String name, String value,
+                               String type, String description) throws KeyorixException {
+        long projectId = resolveProject(projectName);
+        long envId = resolveEnvironment(projectId, environmentName);
+        return createSecret(projectId, envId, name, value, type, description);
+    }
+
+    /**
+     * Creates the secret {@code name} with {@code value} within projectId's
+     * environmentId — no name resolution round trip — via
+     * {@code POST /api/v1/secrets}, and returns its metadata, never the value.
+     * Needs {@code secrets.write} in the scope.
+     *
+     * <p>The value never appears in an exception message, and any echo of it by
+     * the server is stripped from {@link KeyorixException#getResponseBody()}.
+     *
+     * @param type        secret type; {@code null} or empty means {@code generic}
+     * @param description optional free-text note (metadata only); may be null
+     * @throws SecretAlreadyExistsException if the name is already taken in the scope (409)
+     * @throws AuthException                if the token is missing or invalid (401)
+     * @throws ForbiddenException           if the token lacks permission (403)
+     * @throws KeyorixException             on any other error
+     */
+    public Secret createSecret(long projectId, long environmentId, String name, String value,
+                               String type, String description) throws KeyorixException {
+        StringBuilder body = new StringBuilder("{\"name\":").append(JsonParser.quote(name))
+            .append(",\"value\":").append(JsonParser.quote(value))
+            .append(",\"project_id\":").append(projectId)
+            .append(",\"environment_id\":").append(environmentId)
+            .append(",\"type\":").append(JsonParser.quote(type == null || type.isEmpty() ? "generic" : type));
+        if (description != null && !description.isEmpty()) {
+            body.append(",\"description\":").append(JsonParser.quote(description));
+        }
+        body.append('}');
+        try {
+            String response = post(SECRETS_PATH, body.toString(), value);
+            Secret created = JsonParser.parseCreatedSecret(response);
+            if (created == null) {
+                throw new KeyorixException("Failed to parse create-secret response");
+            }
+            return created;
+        } catch (KeyorixException e) {
+            if (Integer.valueOf(409).equals(e.getStatusCode()) && CODE_CONFLICT.equals(e.getErrorCode())) {
+                throw new SecretAlreadyExistsException(
+                    "A secret with this name already exists in the project and environment",
+                    409, e.getResponseBody(), e.getErrorCode());
+            }
+            throw e;
+        }
+    }
+
+    /**
      * Returns the value of secret {@code name} within {@code project}/
      * {@code environment}, all by name, via a single server-authorized
      * round trip — a thin wrapper around {@link #getSecretByRef(String)}.
@@ -337,6 +407,25 @@ public class KeyorixClient {
      */
     public List<Project> listProjects() throws KeyorixException {
         return JsonParser.parseProjectList(get(PROJECTS_PATH));
+    }
+
+    /**
+     * Creates a new project (and seeds its default environments) via
+     * {@code POST /api/v1/projects}.
+     *
+     * @param name        project name
+     * @param description optional free-text description; may be null
+     * @return the created project
+     * @throws KeyorixException if an API error occurs
+     */
+    public Project createProject(String name, String description) throws KeyorixException {
+        String body = "{\"name\":" + JsonParser.quote(name)
+            + ",\"description\":" + JsonParser.quote(description == null ? "" : description) + "}";
+        Project created = JsonParser.parseCreatedProject(post(PROJECTS_PATH, body, null));
+        if (created == null) {
+            throw new KeyorixException("Failed to parse create-project response");
+        }
+        return created;
     }
 
     /**
@@ -427,6 +516,41 @@ public class KeyorixClient {
     }
 
     /**
+     * POSTs a JSON body and returns the response body on 200/201. Any other
+     * status goes through {@link #mapError}, with every occurrence of
+     * {@code redact} (raw and JSON-escaped) stripped from the body first so a
+     * server that echoes the request cannot put a secret value into an
+     * exception.
+     */
+    private String post(String path, String jsonBody, String redact) throws KeyorixException {
+        try {
+            HttpURLConnection conn = openConnection(baseUrl + path, "POST", true);
+            conn.setDoOutput(true);
+            conn.setRequestProperty("Content-Type", "application/json");
+            try (OutputStream os = conn.getOutputStream()) {
+                os.write(jsonBody.getBytes(StandardCharsets.UTF_8));
+            }
+            int status = conn.getResponseCode();
+            if (status != 200 && status != 201) {
+                String body = redactValue(readStream(conn.getErrorStream()), redact);
+                throw mapError(status, body);
+            }
+            String body = readStream(conn.getInputStream());
+            conn.disconnect();
+            return body;
+        } catch (IOException e) {
+            throw new KeyorixException("Request failed: " + e.getMessage(), e);
+        }
+    }
+
+    private static String redactValue(String body, String value) {
+        if (body == null || value == null || value.isEmpty()) return body;
+        String quoted = JsonParser.quote(value);
+        String escaped = quoted.substring(1, quoted.length() - 1);
+        return body.replace(value, "[REDACTED]").replace(escaped, "[REDACTED]");
+    }
+
+    /**
      * Maps a non-2xx HTTP status to a typed exception: AuthException (401),
      * ForbiddenException (403), NotFoundException (404),
      * SecretUnavailableException (409 with a secret-state code), or the generic
@@ -468,6 +592,7 @@ public class KeyorixClient {
      * ({@link ForbiddenException} with this code); the other three are a 409
      * ({@link SecretUnavailableException}).
      */
+    public static final String CODE_CONFLICT = "ConflictError";
     public static final String CODE_SECRET_ACCESS_OUTSIDE_SCHEDULE = "SecretAccessOutsideSchedule";
     public static final String CODE_SECRET_EXPIRED = "SecretExpired";
     public static final String CODE_SECRET_SUSPENDED = "SecretSuspended";

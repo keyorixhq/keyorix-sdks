@@ -16,6 +16,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -152,6 +153,20 @@ func (e *SecretUnavailableError) Error() string {
 	}
 }
 func (e *SecretUnavailableError) Unwrap() error { return e.APIError }
+
+// CodeConflict is the stable error code the server sends with a 409 when a
+// write collides with an existing resource (CreateSecret: the name is taken).
+const CodeConflict = "ConflictError"
+
+// SecretAlreadyExistsError is returned by CreateSecret when a live secret of
+// that name already exists in the project+environment (HTTP 409, code
+// ConflictError). It carries no secret value. Unwraps to *APIError.
+type SecretAlreadyExistsError struct{ *APIError }
+
+func (e *SecretAlreadyExistsError) Error() string {
+	return "keyorix: a secret with this name already exists in the project and environment"
+}
+func (e *SecretAlreadyExistsError) Unwrap() error { return e.APIError }
 
 // errorCode reads the error envelope's "error" field, or "".
 func errorCode(body string) string {
@@ -595,6 +610,111 @@ func (c *Client) ListDeletedSecrets(ctx context.Context, project ProjectRef) ([]
 		result.Data.Deleted[i].ProjectID = projectID
 	}
 	return result.Data.Deleted, nil
+}
+
+// SecretOption customizes CreateSecret.
+type SecretOption func(*createSecretRequest)
+
+// WithSecretType sets the secret's type (default "generic").
+func WithSecretType(t string) SecretOption {
+	return func(r *createSecretRequest) { r.Type = t }
+}
+
+// WithSecretDescription sets a free-text note on the secret (metadata only;
+// never the value).
+func WithSecretDescription(d string) SecretOption {
+	return func(r *createSecretRequest) { r.Description = d }
+}
+
+// createSecretRequest is the POST /api/v1/secrets body. Its String and
+// GoString redact Value, so formatting it with %v/%+v/%#v (or logging it)
+// never prints the secret.
+type createSecretRequest struct {
+	Name          string `json:"name"`
+	Value         string `json:"value"`
+	ProjectID     uint   `json:"project_id"`
+	EnvironmentID uint   `json:"environment_id"`
+	Type          string `json:"type"`
+	Description   string `json:"description,omitempty"`
+}
+
+func (r createSecretRequest) String() string {
+	return fmt.Sprintf("createSecretRequest{name=%q, project_id=%d, environment_id=%d, type=%q, value=[REDACTED]}",
+		r.Name, r.ProjectID, r.EnvironmentID, r.Type)
+}
+func (r createSecretRequest) GoString() string { return r.String() }
+
+// redactValue removes every occurrence of value (raw and JSON-escaped) from a
+// server response body, so a server that echoes request content in a
+// validation message cannot put the secret into APIError.Body.
+func redactValue(body, value string) string {
+	if value == "" {
+		return body
+	}
+	body = strings.ReplaceAll(body, value, "[REDACTED]")
+	if esc, err := json.Marshal(value); err == nil && len(esc) > 2 {
+		body = strings.ReplaceAll(body, string(esc[1:len(esc)-1]), "[REDACTED]")
+	}
+	return body
+}
+
+// CreateSecret creates the secret name with value within project+environment,
+// via POST /api/v1/secrets, and returns its metadata (never the value). project
+// and environment may each be given by name (resolved and cached on this
+// Client) or by ID, exactly as for ListSecretsScoped. The type defaults to
+// "generic"; see WithSecretType and WithSecretDescription.
+//
+// Errors map as for every other call: *AuthError (401), *ForbiddenError (403),
+// plus *SecretAlreadyExistsError (409) when a live secret of that name already
+// exists in the scope. The value is never included in an error's text, and any
+// echo of it is stripped from APIError.Body.
+func (c *Client) CreateSecret(ctx context.Context, project ProjectRef, environment EnvironmentRef, name, value string, opts ...SecretOption) (*Secret, error) {
+	projectID, err := c.resolveProject(ctx, project)
+	if err != nil {
+		return nil, err
+	}
+	envID, err := c.resolveEnvironment(ctx, projectID, environment)
+	if err != nil {
+		return nil, err
+	}
+	payload := createSecretRequest{Name: name, Value: value, ProjectID: projectID, EnvironmentID: envID, Type: "generic"}
+	for _, opt := range opts {
+		opt(&payload)
+	}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return nil, fmt.Errorf("keyorix: failed to encode request: %w", err)
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/api/v1/secrets", bytes.NewReader(body))
+	if err != nil {
+		return nil, fmt.Errorf("keyorix: failed to create request: %w", err)
+	}
+	req.Header.Set("Authorization", authBearer+c.token)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("keyorix: request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusCreated && resp.StatusCode != http.StatusOK {
+		respBody, _ := io.ReadAll(resp.Body)
+		err := errorForResponse(resp.StatusCode, redactValue(string(respBody), value))
+		var apiErr *APIError
+		if resp.StatusCode == http.StatusConflict && errors.As(err, &apiErr) && apiErr.Code == CodeConflict {
+			return nil, &SecretAlreadyExistsError{apiErr}
+		}
+		return nil, err
+	}
+
+	var result struct {
+		Data Secret `json:"data"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, fmt.Errorf("keyorix: failed to parse response: %w", err)
+	}
+	return &result.Data, nil
 }
 
 // GetSecretIn retrieves the value of secret name within project/environment,
