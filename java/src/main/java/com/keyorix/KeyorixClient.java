@@ -221,6 +221,15 @@ public class KeyorixClient {
      * @throws KeyorixException          if an API error occurs
      */
     public String getSecretScoped(String name, long projectId, long environmentId) throws KeyorixException {
+        return fetchSecretValue(findSecretId(name, projectId, environmentId));
+    }
+
+    /**
+     * Resolves the secret named {@code name} within projectId's environmentId
+     * to its ID: {@link SecretNotFoundException} if none has that name,
+     * {@link AmbiguousSecretException} if more than one does.
+     */
+    private long findSecretId(String name, long projectId, long environmentId) throws KeyorixException {
         List<Secret> secrets = listSecretsScoped(projectId, environmentId);
         List<Secret> matches = secrets.stream()
             .filter(s -> name.equals(s.getName()))
@@ -236,7 +245,97 @@ public class KeyorixClient {
                     + environmentId + ": matches IDs " + ids,
                 ids);
         }
-        return fetchSecretValue(matches.get(0).getId());
+        return matches.get(0).getId();
+    }
+
+    /**
+     * Writes {@code value} as a new version of the secret named {@code name}
+     * within projectName's environmentName and returns its metadata (never the
+     * value). The name is resolved as for {@code getSecretScoped}. See
+     * {@link #updateSecretById(long, String)}.
+     *
+     * @throws SecretNotFoundException   if no secret in scope has this name
+     * @throws AmbiguousSecretException  if more than one secret in scope has this name
+     * @throws KeyorixException          if an API error occurs
+     */
+    public Secret updateSecret(String projectName, String environmentName, String name, String value)
+            throws KeyorixException {
+        long projectId = resolveProject(projectName);
+        return updateSecret(projectId, resolveEnvironment(projectId, environmentName), name, value);
+    }
+
+    /** As {@link #updateSecret(String, String, String, String)}, by project and environment ID. */
+    public Secret updateSecret(long projectId, long environmentId, String name, String value)
+            throws KeyorixException {
+        return updateSecretById(findSecretId(name, projectId, environmentId), value);
+    }
+
+    /**
+     * Writes {@code value} as a new version of secret {@code secretId}, via
+     * {@code PUT /api/v1/secrets/{id}}, and returns its metadata (never the
+     * value). Earlier versions are kept; a read returns the new value.
+     * {@code value} must not be empty (the server ignores an empty value, so
+     * nothing would be written).
+     *
+     * <p>Throws {@link AuthException} (401), {@link ForbiddenException} (403:
+     * the token cannot write this secret) or {@link NotFoundException} (404:
+     * no such live secret, a soft-deleted one included). A 409 under heavy
+     * write contention on the same secret is a plain {@link KeyorixException}:
+     * retry. The value is never included in an exception's message, and any
+     * echo of it is stripped from {@link KeyorixException#getResponseBody()}.
+     *
+     * @throws KeyorixException if an API error occurs
+     */
+    public Secret updateSecretById(long secretId, String value) throws KeyorixException {
+        if (value == null || value.isEmpty()) {
+            throw new KeyorixException("updateSecret value must not be empty");
+        }
+        WriteResponse resp = write("PUT", SECRETS_PATH + "/" + secretId, "{\"value\":" + jsonString(value) + "}",
+            value, 200);
+        Secret secret = JsonParser.parseSecretResponse(resp.body);
+        if (secret == null) {
+            throw new KeyorixException("Failed to parse the update response");
+        }
+        return secret;
+    }
+
+    /**
+     * Soft-deletes the secret named {@code name} within projectName's
+     * environmentName. The name is resolved as for {@code getSecretScoped}.
+     * See {@link #deleteSecretById(long)}.
+     *
+     * @return the purge date, or "" if the server sent none
+     * @throws SecretNotFoundException   if no secret in scope has this name
+     * @throws AmbiguousSecretException  if more than one secret in scope has this name
+     * @throws KeyorixException          if an API error occurs
+     */
+    public String deleteSecret(String projectName, String environmentName, String name) throws KeyorixException {
+        long projectId = resolveProject(projectName);
+        return deleteSecret(projectId, resolveEnvironment(projectId, environmentName), name);
+    }
+
+    /** As {@link #deleteSecret(String, String, String)}, by project and environment ID. */
+    public String deleteSecret(long projectId, long environmentId, String name) throws KeyorixException {
+        return deleteSecretById(findSecretId(name, projectId, environmentId));
+    }
+
+    /**
+     * Soft-deletes secret {@code secretId}, via {@code DELETE /api/v1/secrets/{id}}.
+     * The secret stops being readable at once but is restorable until the
+     * returned purge date (RFC 3339, UTC; {@link #listDeletedSecrets} lists it
+     * with the same date). The date is "" only if the server did not send one;
+     * the delete itself still succeeded.
+     *
+     * <p>Throws {@link AuthException} (401), {@link ForbiddenException} (403)
+     * or {@link NotFoundException} (404: no such live secret, so deleting
+     * twice fails the second time). The server asks for no step-up or MFA for
+     * a delete.
+     *
+     * @throws KeyorixException if an API error occurs
+     */
+    public String deleteSecretById(long secretId) throws KeyorixException {
+        String purgeAt = write("DELETE", SECRETS_PATH + "/" + secretId, null, null, 204, 200).purgeAt;
+        return purgeAt == null ? "" : purgeAt;
     }
 
     /**
@@ -424,6 +523,83 @@ public class KeyorixClient {
         } catch (IOException e) {
             throw new KeyorixException("Request failed: " + e.getMessage(), e);
         }
+    }
+
+    /** A successful write response: its body and the Keyorix-Purge-At header (null if absent). */
+    private static final class WriteResponse {
+        final String body;
+        final String purgeAt;
+
+        WriteResponse(String body, String purgeAt) {
+            this.body = body;
+            this.purgeAt = purgeAt;
+        }
+    }
+
+    /**
+     * Sends a write request ({@code jsonBody} may be null) and returns the
+     * response, or throws the typed exception for any status not in
+     * {@code okStatuses}. {@code redact}, when given, is stripped from the
+     * exception's response body, so a server that echoes request content
+     * cannot put the secret there.
+     */
+    private WriteResponse write(String method, String path, String jsonBody, String redact, int... okStatuses)
+            throws KeyorixException {
+        try {
+            HttpURLConnection conn = openConnection(baseUrl + path, method, true);
+            if (jsonBody != null) {
+                conn.setRequestProperty("Content-Type", "application/json");
+                conn.setDoOutput(true);
+                conn.getOutputStream().write(jsonBody.getBytes(StandardCharsets.UTF_8));
+            }
+            int status = conn.getResponseCode();
+            boolean ok = false;
+            for (int s : okStatuses) ok |= s == status;
+            if (!ok) {
+                String body = redactValue(readStream(conn.getErrorStream()), redact);
+                conn.disconnect();
+                throw mapError(status, body);
+            }
+            String body = status == 204 ? "" : readStream(conn.getInputStream());
+            String purgeAt = conn.getHeaderField("Keyorix-Purge-At");
+            conn.disconnect();
+            return new WriteResponse(body, purgeAt);
+        } catch (IOException e) {
+            throw new KeyorixException("Request failed: " + e.getMessage(), e);
+        }
+    }
+
+    /**
+     * Removes every occurrence of {@code value} (raw and JSON-escaped) from a
+     * response body, so a server that echoes request content in a validation
+     * message cannot put the secret into an exception's response body.
+     */
+    private static String redactValue(String body, String value) {
+        if (value == null || value.isEmpty() || body == null) return body;
+        String escaped = jsonString(value);
+        escaped = escaped.substring(1, escaped.length() - 1);
+        return body.replace(value, "[REDACTED]").replace(escaped, "[REDACTED]");
+    }
+
+    /** Encodes {@code s} as a quoted JSON string, escaping everything JSON requires (a multi-line value included). */
+    private static String jsonString(String s) {
+        StringBuilder sb = new StringBuilder(s.length() + 2).append('"');
+        for (int i = 0; i < s.length(); i++) {
+            char c = s.charAt(i);
+            switch (c) {
+                case '"':  sb.append("\\\""); break;
+                case '\\': sb.append("\\\\"); break;
+                case '\n': sb.append("\\n"); break;
+                case '\r': sb.append("\\r"); break;
+                case '\t': sb.append("\\t"); break;
+                case '\b': sb.append("\\b"); break;
+                case '\f': sb.append("\\f"); break;
+                default:
+                    if (c < 0x20) sb.append(String.format("\\u%04x", (int) c));
+                    else sb.append(c);
+            }
+        }
+        return sb.append('"').toString();
     }
 
     /**
