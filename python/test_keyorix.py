@@ -8,6 +8,10 @@ from unittest.mock import patch
 import json
 import keyorix
 
+# python.yml runs only this module; the update/delete cases live in their own
+# file and are pulled in here so CI runs them.
+from test_update_delete import UpdateDeleteTests  # noqa: F401
+
 
 class TestClient(unittest.TestCase):
 
