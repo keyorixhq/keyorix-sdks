@@ -155,6 +155,24 @@ function errorForResponse(status, body) {
   return new KeyorixError(`Server returned ${status}`, opts);
 }
 
+// Removes every occurrence of `value` (raw and JSON-escaped) from a response
+// body, so a server that echoes request content in a validation message
+// cannot put the secret into an error's responseBody.
+function redactValue(body, value) {
+  if (typeof value !== 'string' || value === '') return body;
+  const escaped = JSON.stringify(value).slice(1, -1);
+  return body.split(value).join('[REDACTED]').split(escaped).join('[REDACTED]');
+}
+
+// A secret ID is interpolated into the request path: accept only a positive
+// integer, so a caller-influenced id cannot change which resource is addressed.
+function secretId(id) {
+  if (!Number.isSafeInteger(id) || id <= 0) {
+    throw new KeyorixError('secret id must be a positive integer');
+  }
+  return id;
+}
+
 // ── HTTP helper ──────────────────────────────────────────────────────────────
 
 function request(options, body) {
@@ -165,7 +183,7 @@ function request(options, body) {
       res.on('data', (chunk) => chunks.push(chunk));
       res.on('end', () => {
         const raw = Buffer.concat(chunks).toString();
-        resolve({ status: res.statusCode, body: raw });
+        resolve({ status: res.statusCode, body: raw, headers: res.headers });
       });
     });
     req.on('error', reject);
@@ -498,6 +516,15 @@ class Client {
    *   name -- never guessed; .ids lists every match
    */
   async getSecretScoped(name, project, environment) {
+    return this._getSecretValue(await this._findSecretId(name, project, environment));
+  }
+
+  /**
+   * Resolve the secret named `name` within project/environment to its ID:
+   * SecretNotFoundError if none has that name, AmbiguousSecretError if more
+   * than one does.
+   */
+  async _findSecretId(name, project, environment) {
     const secrets = await this.listSecretsScoped(project, environment);
     const matches = secrets.filter((s) => s.name === name);
     if (matches.length === 0) {
@@ -512,7 +539,102 @@ class Client {
         { ids }
       );
     }
-    return this._getSecretValue(matches[0].id);
+    return matches[0].id;
+  }
+
+  /**
+   * Write `value` as a new version of the secret named `name` within
+   * project/environment, and return its metadata (never the value). The name
+   * is resolved as for getSecretScoped. See updateSecretById.
+   * @param {string|number} project - See listSecretsScoped.
+   * @param {string|number} environment - See listSecretsScoped.
+   * @param {string} name
+   * @param {string} value - New plaintext value; must not be empty.
+   * @returns {Promise<object>} `{ id, name, type, projectId, createdAt }`
+   * @throws {SecretNotFoundError} if no secret in scope has this name
+   * @throws {AmbiguousSecretError} if more than one does
+   */
+  async updateSecret(project, environment, name, value) {
+    return this.updateSecretById(await this._findSecretId(name, project, environment), value);
+  }
+
+  /**
+   * Write `value` as a new version of secret `id`, via PUT /api/v1/secrets/{id}.
+   * Earlier versions are kept; a read returns the new value. `value` must not
+   * be empty (the server ignores an empty value, so nothing would be written).
+   *
+   * Throws AuthError (401), ForbiddenError (403: the token cannot write this
+   * secret) or NotFoundError (404: no such live secret, including a
+   * soft-deleted one). A 409 under heavy write contention on the same secret
+   * is a plain KeyorixError: retry. The value is never included in an error's
+   * message, and any echo of it is stripped from `responseBody`.
+   * @param {number} id
+   * @param {string} value
+   * @returns {Promise<object>} `{ id, name, type, projectId, createdAt }`
+   */
+  async updateSecretById(id, value) {
+    if (typeof value !== 'string' || value === '') {
+      throw new KeyorixError('updateSecret value must be a non-empty string');
+    }
+    const resp = await this._write('PUT', `/api/v1/secrets/${secretId(id)}`, { value }, [200]);
+    const s = JSON.parse(resp.body)?.data || {};
+    return { id: s.id, name: s.name, type: s.type, projectId: s.project_id, createdAt: s.created_at };
+  }
+
+  /**
+   * Soft-delete the secret named `name` within project/environment. The name
+   * is resolved as for getSecretScoped. See deleteSecretById.
+   * @param {string|number} project - See listSecretsScoped.
+   * @param {string|number} environment - See listSecretsScoped.
+   * @param {string} name
+   * @returns {Promise<{purgeAt: string|null}>}
+   * @throws {SecretNotFoundError} if no secret in scope has this name
+   * @throws {AmbiguousSecretError} if more than one does
+   */
+  async deleteSecret(project, environment, name) {
+    return this.deleteSecretById(await this._findSecretId(name, project, environment));
+  }
+
+  /**
+   * Soft-delete secret `id`, via DELETE /api/v1/secrets/{id}. The secret stops
+   * being readable at once but is restorable until `purgeAt` (RFC 3339, UTC;
+   * listDeletedSecrets lists it with the same date). `purgeAt` is null only if
+   * the server did not send one; the delete itself still succeeded.
+   *
+   * Throws AuthError (401), ForbiddenError (403) or NotFoundError (404: no such
+   * live secret, so deleting twice fails the second time). The server asks for
+   * no step-up or MFA for a delete.
+   * @param {number} id
+   * @returns {Promise<{purgeAt: string|null}>}
+   */
+  async deleteSecretById(id) {
+    const resp = await this._write('DELETE', `/api/v1/secrets/${secretId(id)}`, undefined, [200, 204]);
+    return { purgeAt: resp.headers['keyorix-purge-at'] || null };
+  }
+
+  /**
+   * Send a write request (JSON body when `payload` is given) and return the
+   * response, or throw the typed error for any status not in `okStatuses`.
+   * A string value in `payload` is stripped from the error's `responseBody`,
+   * so a server that echoes request content cannot put the secret there.
+   */
+  async _write(method, path, payload, okStatuses) {
+    const body = payload === undefined ? undefined : JSON.stringify(payload);
+    const headers = { Authorization: `Bearer ${this._token}` };
+    if (body !== undefined) {
+      headers['Content-Type'] = 'application/json';
+      headers['Content-Length'] = Buffer.byteLength(body);
+    }
+    let resp;
+    try {
+      resp = await request({ ...this._parsed, path, method, headers, timeout: this._timeout }, body);
+    } catch (err) {
+      throw new KeyorixError(`Request failed: ${err.message}`);
+    }
+    if (!okStatuses.includes(resp.status)) {
+      throw errorForResponse(resp.status, redactValue(resp.body, payload?.value));
+    }
+    return resp;
   }
 
   /**
