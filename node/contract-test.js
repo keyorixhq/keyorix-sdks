@@ -188,6 +188,17 @@ async function runContractTests() {
   const value = await client.getSecretScoped(secretName, defaultProject.id, devEnv.id);
   assert(value === secretValue, `getSecretScoped() round-trips the secret value — got ${JSON.stringify(value)}`);
 
+  // JSON escapes: newline, tab, CR, quote, backslash, trailing backslash, a C0 control
+  // char, HTML-sensitive chars, U+2028, non-ASCII, an astral char.
+  const escName = `contract-escapes-${Date.now()}`;
+  const escValue = 'line1\nline2 "q" back\\slash\t\r<a href="x">&</a> \u0001   café \u{1F600} end\\';
+  await seedSecret(serverUrl, token, defaultProject.id, devEnv.id, escName, escValue);
+  const escGot = await client.getSecretScoped(escName, defaultProject.id, devEnv.id);
+  assert(
+    Buffer.from(escGot, 'utf8').equals(Buffer.from(escValue, 'utf8')),
+    `getSecretScoped() returns a value with JSON escapes byte-for-byte — got ${JSON.stringify(escGot)}`
+  );
+
   // purgeAt on a soft-deleted secret (DELETE is not part of this SDK's public surface: raw HTTP).
   const purgeName = `contract-purge-${Date.now()}`;
   await seedSecret(serverUrl, token, defaultProject.id, devEnv.id, purgeName, 'v');

@@ -142,12 +142,55 @@ class JsonParser {
         if (colon == -1) return null;
         int start = json.indexOf('"', colon + 1);
         if (start == -1) return null;
-        int end = start + 1;
-        while (end < json.length()) {
-            if (json.charAt(end) == '"' && json.charAt(end - 1) != '\\') break;
-            end++;
+        return decodeString(json, start + 1);
+    }
+
+    /**
+     * Decodes the body of a JSON string whose opening quote precedes {@code from},
+     * up to the closing quote: {@code \" \\ \/ \b \f \n \r \t} and {@code \}{@code uXXXX}
+     * (a surrogate pair is two consecutive escapes, which concatenate into one code point).
+     * A malformed escape throws rather than returning a silently altered value.
+     */
+    private static String decodeString(String json, int from) {
+        StringBuilder sb = new StringBuilder();
+        int i = from;
+        while (i < json.length()) {
+            char c = json.charAt(i++);
+            if (c == '"') return sb.toString();
+            if (c != '\\') {
+                sb.append(c);
+                continue;
+            }
+            if (i >= json.length()) break;
+            char e = json.charAt(i++);
+            switch (e) {
+                case '"': sb.append('"'); break;
+                case '\\': sb.append('\\'); break;
+                case '/': sb.append('/'); break;
+                case 'b': sb.append('\b'); break;
+                case 'f': sb.append('\f'); break;
+                case 'n': sb.append('\n'); break;
+                case 'r': sb.append('\r'); break;
+                case 't': sb.append('\t'); break;
+                case 'u':
+                    if (i + 4 > json.length()) {
+                        throw new IllegalArgumentException("truncated \\u escape in JSON string");
+                    }
+                    int cp = 0;
+                    for (int k = 0; k < 4; k++) {
+                        int d = Character.digit(json.charAt(i + k), 16);
+                        if (d < 0) throw new IllegalArgumentException("invalid \\u escape in JSON string");
+                        cp = cp * 16 + d;
+                    }
+                    sb.append((char) cp);
+                    i += 4;
+                    break;
+                default:
+                    throw new IllegalArgumentException("invalid escape \\" + e + " in JSON string");
+            }
         }
-        return json.substring(start + 1, end);
+        // unterminated string: keep the old lenient behaviour of returning what was read
+        return sb.toString();
     }
 
     /** True only when the key is present with the literal value true. */
