@@ -107,6 +107,11 @@ async function runContractTests() {
   versions = await versionNumbers(serverUrl, token, id);
   assert(versions.length === 3 && versions[0] === 3, `two updates: three versions, newest numbered 3 (got ${JSON.stringify(versions)})`);
 
+  // A rotated value with quotes, backslashes, a newline and a tab reads back byte for byte.
+  const tricky = 'line1\nline2 "quoted" back\\slash\ttab é ends-with-backslash\\';
+  await client.updateSecretById(id, tricky);
+  assert((await client.getSecretScoped(name, project.id, env.id)) === tricky, 'a value needing JSON escapes round-trips through updateSecret');
+
   // 403: a zero-grant machine token may neither update nor delete
   const machine = await ok(raw(serverUrl, 'POST', `/api/v1/projects/${project.id}/machine-identities`,
     { name: `contract-test-machine-${Date.now()}`, identity_type: 'service' }, token), 'create machine identity');
@@ -122,7 +127,7 @@ async function runContractTests() {
     try { await call(); } catch (e) { err = e; }
     assert(err instanceof ForbiddenError, `${label} with a zero-grant token is a ForbiddenError`);
   }
-  assert((await client.getSecretScoped(name, project.id, env.id)) === 'value-three', 'the refused calls changed nothing');
+  assert((await client.getSecretScoped(name, project.id, env.id)) === tricky, 'the refused calls changed nothing');
 
   // delete: soft delete with a purge date
   const { purgeAt } = await client.deleteSecret(project.id, env.id, name);

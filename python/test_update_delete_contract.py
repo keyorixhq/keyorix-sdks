@@ -64,13 +64,18 @@ class ContractUpdateDeleteTests(unittest.TestCase):
         versions = self._version_numbers(secret_id)
         self.assertEqual((len(versions), versions[0]), (3, 3), versions)
 
+        # A rotated value with quotes, backslashes, a newline and a tab reads back byte for byte.
+        tricky = 'line1\nline2 "quoted" back\\slash\ttab é ends-with-backslash\\'
+        c.update_secret_by_id(secret_id, tricky)
+        self.assertEqual(c.get_secret_scoped(name, project.id, env.id), tricky)
+
         # 403: a zero-grant machine token may neither update nor delete
         machine = keyorix.Client(SERVER_URL, self.base._create_machine_token(self.admin_token, project.id))
         with self.assertRaises(keyorix.ForbiddenError):
             machine.update_secret_by_id(secret_id, "attacker-value")
         with self.assertRaises(keyorix.ForbiddenError):
             machine.delete_secret_by_id(secret_id)
-        self.assertEqual(c.get_secret_scoped(name, project.id, env.id), "value-three", "refused calls changed nothing")
+        self.assertEqual(c.get_secret_scoped(name, project.id, env.id), tricky, "refused calls changed nothing")
 
         # delete: soft delete with a purge date
         purge_at = c.delete_secret(project.id, env.id, name)

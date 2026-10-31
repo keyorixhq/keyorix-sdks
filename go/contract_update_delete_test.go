@@ -28,6 +28,10 @@ func secretVersionNumbers(t *testing.T, serverURL, token string, id uint) []int 
 	return nums
 }
 
+// trickyValue is a rotated value a generated password or a PEM could be: it
+// needs JSON escaping on the way in and decoding on the way out.
+const trickyValue = "line1\nline2 \"quoted\" back\\slash\ttab é ends-with-backslash\\"
+
 // TestContract_UpdateDeleteSecret drives UpdateSecret and DeleteSecret against
 // a real keyorix-server: update writes a new version whose value is readable,
 // and delete is a soft delete (gone from a get, listed in the deleted listing
@@ -118,6 +122,18 @@ func TestContract_UpdateDeleteSecret(t *testing.T) {
 		if v := secretVersionNumbers(t, serverURL, token, id); len(v) != 3 || v[0] != 3 {
 			t.Errorf("versions after two updates = %v, want three with the newest numbered 3", v)
 		}
+
+		// A rotated value with quotes, backslashes, a newline and a tab must read back byte for byte.
+		if _, err := client.UpdateSecretByID(ctx, id, trickyValue); err != nil {
+			t.Fatalf("UpdateSecretByID(tricky value): %v", err)
+		}
+		got, err = client.GetSecretScoped(ctx, name, project, env)
+		if err != nil {
+			t.Fatalf("GetSecretScoped: %v", err)
+		}
+		if got != trickyValue {
+			t.Errorf("value after update = %q, want %q", got, trickyValue)
+		}
 	})
 
 	t.Run("UpdateSecret and DeleteSecret by a zero-grant token are forbidden (403)", func(t *testing.T) {
@@ -135,8 +151,8 @@ func TestContract_UpdateDeleteSecret(t *testing.T) {
 			t.Errorf("DeleteSecretByID with a zero-grant token: got %T (%v), want *ForbiddenError", err, err)
 		}
 		// Neither call changed anything.
-		if got, err := client.GetSecretScoped(ctx, name, project, env); err != nil || got != "value-three" {
-			t.Errorf("secret after refused calls = %q, %v; want unchanged value-three", got, err)
+		if got, err := client.GetSecretScoped(ctx, name, project, env); err != nil || got != trickyValue {
+			t.Errorf("secret after refused calls = %q, %v; want it unchanged", got, err)
 		}
 	})
 
