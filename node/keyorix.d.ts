@@ -9,6 +9,21 @@ export interface Secret {
   purgeAt?: string;
 }
 
+/** Secret metadata returned by updateSecret / updateSecretById (never the value). */
+export interface UpdatedSecret {
+  id: number;
+  name: string;
+  type: string;
+  projectId: number;
+  createdAt: string;
+}
+
+/** Result of deleteSecret / deleteSecretById. */
+export interface DeletedSecret {
+  /** Restore deadline (RFC 3339 UTC); null only if the server sent none. */
+  purgeAt: string | null;
+}
+
 export interface Project {
   id: number;
   name: string;
@@ -80,6 +95,12 @@ export declare class Client {
   getSecretScoped(name: string, project: string | number, environment: string | number): Promise<string>;
   getSecretIn(project: string, environment: string, name: string): Promise<string>;
   getSecretByRef(ref: string): Promise<string>;
+  /** Writes `value` as a new version of the named secret; returns metadata, never the value. */
+  updateSecret(project: string | number, environment: string | number, name: string, value: string): Promise<UpdatedSecret>;
+  updateSecretById(id: number, value: string): Promise<UpdatedSecret>;
+  /** Soft-deletes the named secret; `purgeAt` is its restore deadline (null if the server sent none). */
+  deleteSecret(project: string | number, environment: string | number, name: string): Promise<DeletedSecret>;
+  deleteSecretById(id: number): Promise<DeletedSecret>;
   listProjects(): Promise<Project[]>;
   createProject(name: string, description?: string): Promise<Project>;
   listEnvironments(projectId: number): Promise<Environment[]>;

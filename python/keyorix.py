@@ -190,6 +190,27 @@ def _error_for_response(status_code: int, body: str) -> KeyorixError:
     return KeyorixError(f"Server returned {status_code}", status_code=status_code, response_body=body, code=code)
 
 
+def _redact_value(body: str, payload: Optional[dict]) -> str:
+    """Remove every occurrence of the request's secret value (raw and
+    JSON-escaped) from a response body, so a server that echoes request
+    content in a validation message cannot put the secret into an error's
+    response_body."""
+    value = payload.get("value") if payload else None
+    if not isinstance(value, str) or value == "":
+        return body
+    escaped = json.dumps(value)[1:-1]
+    return body.replace(value, "[REDACTED]").replace(escaped, "[REDACTED]")
+
+
+def _secret_id(secret_id: int) -> int:
+    """A secret ID is interpolated into the request path: accept only a
+    positive int, so a caller-influenced id cannot change which resource is
+    addressed."""
+    if not isinstance(secret_id, int) or isinstance(secret_id, bool) or secret_id <= 0:
+        raise KeyorixError("secret id must be a positive integer")
+    return secret_id
+
+
 class SecretNotFoundError(KeyorixError):
     """Raised when a secret cannot be found."""
 
@@ -540,6 +561,12 @@ class Client:
                                    name -- never guessed; .ids lists every match
             KeyorixError: On other errors
         """
+        return self._get_secret_value(self._find_secret_id(name, project, environment))
+
+    def _find_secret_id(self, name: str, project: Union[str, int], environment: Union[str, int]) -> int:
+        """Resolve the secret named `name` within project+environment to its
+        ID: SecretNotFoundError if none has that name, AmbiguousSecretError if
+        more than one does."""
         secrets = self.list_secrets_scoped(project, environment)
         matches = [s for s in secrets if s.name == name]
         if not matches:
@@ -553,7 +580,98 @@ class Client:
                 f"{environment!r}: matches IDs {ids}",
                 ids=ids,
             )
-        return self._get_secret_value(matches[0].id)
+        return matches[0].id
+
+    def update_secret(
+        self, project: Union[str, int], environment: Union[str, int], name: str, value: str
+    ) -> Secret:
+        """Write `value` as a new version of the secret named `name` within
+        project+environment and return its metadata (never the value). The
+        name is resolved as for get_secret_scoped.
+
+        Raises:
+            SecretNotFoundError: If no secret in scope has this name
+            AmbiguousSecretError: If more than one secret in scope has this name
+            KeyorixError: See update_secret_by_id
+        """
+        return self.update_secret_by_id(self._find_secret_id(name, project, environment), value)
+
+    def update_secret_by_id(self, secret_id: int, value: str) -> Secret:
+        """Write `value` as a new version of secret `secret_id`, via
+        PUT /api/v1/secrets/{id}, and return its metadata (never the value).
+        Earlier versions are kept; a read returns the new value. `value` must
+        not be empty (the server ignores an empty value, so nothing would be
+        written).
+
+        Raises:
+            AuthError: 401
+            ForbiddenError: 403 -- the token cannot write this secret
+            NotFoundError: 404 -- no such live secret (a soft-deleted one included)
+            KeyorixError: any other error; a 409 under heavy write contention
+                on the same secret is a plain KeyorixError: retry. The value is
+                never included in an error's message, and any echo of it is
+                stripped from response_body.
+        """
+        if not isinstance(value, str) or value == "":
+            raise KeyorixError("update_secret value must be a non-empty string")
+        body, _ = self._write("PUT", f"/api/v1/secrets/{_secret_id(secret_id)}", {"value": value}, (200,))
+        return Secret._from_dict(json.loads(body).get("data", {}))
+
+    def delete_secret(
+        self, project: Union[str, int], environment: Union[str, int], name: str
+    ) -> Optional[str]:
+        """Soft-delete the secret named `name` within project+environment. The
+        name is resolved as for get_secret_scoped. See delete_secret_by_id.
+
+        Raises:
+            SecretNotFoundError: If no secret in scope has this name
+            AmbiguousSecretError: If more than one secret in scope has this name
+        """
+        return self.delete_secret_by_id(self._find_secret_id(name, project, environment))
+
+    def delete_secret_by_id(self, secret_id: int) -> Optional[str]:
+        """Soft-delete secret `secret_id`, via DELETE /api/v1/secrets/{id}. The
+        secret stops being readable at once but is restorable until the
+        returned purge date (RFC 3339 UTC; list_deleted_secrets lists it with
+        the same date). None only if the server did not send one; the delete
+        itself still succeeded.
+
+        Raises:
+            AuthError: 401
+            ForbiddenError: 403
+            NotFoundError: 404 -- no such live secret, so deleting twice fails
+                the second time
+            KeyorixError: any other error. The server asks for no step-up or
+                MFA for a delete.
+        """
+        _, headers = self._write("DELETE", f"/api/v1/secrets/{_secret_id(secret_id)}", None, (200, 204))
+        return headers.get("Keyorix-Purge-At") or None
+
+    def _write(self, method: str, path: str, payload: Optional[dict], ok: tuple):
+        """Send a write request (JSON body when `payload` is given) and return
+        (response body, response headers); raise the typed error for any
+        status not in `ok`. A string "value" in `payload` is stripped from the
+        error's response_body, so a server that echoes request content cannot
+        put the secret there."""
+        headers = {"Authorization": f"Bearer {self._token}"}
+        data = None
+        if payload is not None:
+            data = json.dumps(payload).encode()
+            headers["Content-Type"] = "application/json"
+        req = urllib.request.Request(f"{self._base}{path}", data=data, headers=headers, method=method)
+        try:
+            with urllib.request.urlopen(req, timeout=self._timeout, context=self._ssl_context) as resp:
+                if resp.status not in ok:
+                    raise _error_for_response(resp.status, _redact_value(resp.read().decode(errors="replace"), payload))
+                return resp.read(), resp.headers
+        except urllib.error.HTTPError as e:
+            body = _redact_value(e.read().decode(errors="replace"), payload)
+            e.close()
+            raise _error_for_response(e.code, body) from e
+        except urllib.error.URLError as e:
+            raise KeyorixError(f"Request failed: {e.reason}") from e
+        except TimeoutError as e:
+            raise KeyorixError(f"Request timed out: {e}") from e
 
     def _resolve_project(self, project: Union[str, int]) -> int:
         """Resolve project to an ID. An int resolves with no network call; a

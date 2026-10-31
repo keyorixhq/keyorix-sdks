@@ -75,6 +75,32 @@ Zero dependencies — stdlib only. Or just copy keyorix.py into your project.
 - client.list_deleted_secrets(project) -> list — the project's soft-deleted
   secrets; `purge_at` is the restore deadline (RFC 3339 UTC; empty on live
   secrets). Needs server v0.96.0+.
+- client.update_secret(project, environment, name, value) -> Secret — writes
+  `value` as a **new version** of the secret `name` (the rotation call) and
+  returns its metadata — never the value. Earlier versions are kept and a read
+  returns the new value. The name is resolved as for `get_secret_scoped`
+  (`SecretNotFoundError` / `AmbiguousSecretError`; an ambiguous name writes
+  nothing). `value` must be a non-empty `str`. Needs `secrets.write` on the
+  secret. `client.update_secret_by_id(secret_id, value)` is the same call when
+  you already have the ID (a positive `int`).
+  ```python
+  client.update_secret("my-project", "production", "db-password", new_password)
+  ```
+  The value is never put in an exception's message, and an echo of it in the
+  server's response is replaced with `[REDACTED]` in `e.response_body`. Under
+  heavy concurrent writes to the same secret the server answers 409; that is a
+  plain `KeyorixError` (`e.status_code == 409`): retry.
+- client.delete_secret(project, environment, name) -> Optional[str] —
+  soft-deletes the secret: it stops being readable at once but can be restored
+  until the returned purge date (RFC 3339 UTC; `list_deleted_secrets` lists it
+  with the same date). `None` only if the server sent none (the delete still
+  succeeded). Deleting twice raises `NotFoundError` the second time. Needs
+  `secrets.delete` on the secret. `client.delete_secret_by_id(secret_id)` is the
+  by-ID form. The server asks for no step-up or MFA for a delete; the SDK adds
+  none. Both calls raise `ForbiddenError` (403) when the token may not
+  write/delete that secret and `NotFoundError` (404) when no live secret has
+  that ID. The purge date needs server v0.96.0+; on an older server the delete
+  works and the result is `None`.
 - client.health() -> bool
 
 `project`/`environment` each accept either a name (`str`, resolved to an ID via

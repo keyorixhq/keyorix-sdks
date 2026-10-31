@@ -3,8 +3,9 @@
 All four SDKs in this repo (`go/`, `node/`, `python/`, `java/`) release
 together at one `vX.Y.Z` tag and cover the same server API surface: login,
 health, `ListProjects`/`CreateProject`, `ListEnvironments`,
-`ListSecretsScoped`/`GetSecretScoped` (read-only for secret values — none of
-the four SDKs can create/update/delete a secret). See each language's own
+`ListSecretsScoped`/`GetSecretScoped`, `UpdateSecret` (write a new version —
+the rotation call) and `DeleteSecret` (soft delete, returning the purge date).
+None of the four SDKs can create a secret yet. See each language's own
 README `## API` section for its exact method signatures, and ADR-072 in the
 [`keyorix`](https://github.com/keyorixhq/keyorix) repo for why the four are
 consolidated here.
@@ -21,8 +22,10 @@ SDK's contract test suite against it —
 `python/test_keyorix_contract.py`,
 `java/src/test/java/com/keyorix/ContractTest.java`. Each covers the SDK's
 full public surface: health, list/create project, list environments,
-list/get a secret's value — against a freshly self-bootstrapped server, not
-a shared fixture. A row below is "known-compatible" only for a version pair
+list/get a secret's value, update a secret (version increments, new value
+readable) and delete it (gone from a get, listed in the deleted listing with
+its purge date) — against a freshly self-bootstrapped server, not a shared
+fixture. A row below is "known-compatible" only for a version pair
 where that suite was actually green; it is not a promise about versions that
 weren't tested.
 
@@ -33,6 +36,7 @@ weren't tested.
 | 0.3.0 (go/node/python/java, unreleased) | `main` | `60cb69e2` | 2026-09-25 | Green — full contract suite (see table below) |
 | 0.3.0 (go/node/python/java, unreleased) | `main` | `c5be894d` | 2026-09-28 | Green, after landing keyorixhq/keyorix-sdks#39-#41 (see Session K report) — see "What changed" below |
 | unreleased + MFA error + `purgeAt` (go/node/python/java) | `main` | - | - | `purgeAt` contract test runs in CI against the SQLite contract server (`security.require_mfa: false`); the MFA login error is covered by mock-server unit tests, not the contract suites |
+| unreleased + `UpdateSecret`/`DeleteSecret` (go/node/python/java) | `main` | `b077e716` | 2026-10-31 | Update/delete contract cases green for Go, Node and Python against a `keyorix-server` built from that commit (SQLite, same config as CI). Java: the same cases green via the JUnit launcher, because Maven Central was unreachable from the sandbox that ran them — CI's `mvn -Dtest=ContractTest` is the authoritative Java result |
 
 ### Minimum server version
 
@@ -41,11 +45,14 @@ weren't tested.
 | Everything in the 0.3.0 rows above | as before (not re-derived here) |
 | `MFARequiredError`/`verify_mfa` — the `POST /auth/login` → `mfa_required` + `mfa_challenge`, `POST /auth/mfa/verify` flow (TOTP and recovery codes) | v0.4.0 (ADR-034). The `totp_available`/`webauthn_available` flags are read as false when an older server omits them. |
 | `purgeAt` / `listDeletedSecrets` (`GET /api/v1/projects/{id}/secrets/deleted`, `purge_at`) | v0.96.0 (keyorix #3021, RETENTION-1). On an older server the call fails with the server's own 404/403 and `purgeAt` stays empty. |
+| `UpdateSecret` (`PUT /api/v1/secrets/{id}` with `{"value": ...}`: a new version) | v0.1.0 — the endpoint is in every release (first commit `cbbc1c505`, 2025-07-21). |
+| `DeleteSecret` (`DELETE /api/v1/secrets/{id}`) | v0.1.0 for the delete itself. The purge date it returns (the `Keyorix-Purge-At` response header) needs v0.96.0 (keyorix `b8a84b85c`); on an older server the delete succeeds and the SDK returns no date (`nil`/`null`/`None`/`""`). Whether the delete is soft (restorable) or permanent on an older server depends on that server's own soft-delete setting. |
 
 The MFA tag floor comes from `git tag --contains` of the commit that added
 `server/http/handlers/mfa.go`; the `purgeAt` floor from the same check on
-#3021. Neither is exercised against those old releases by CI (the contract job
-builds `main`).
+#3021; the update/delete floors from the same check on the commit that added
+the handlers and on `b8a84b85c`. None is exercised against those old releases
+by CI (the contract job builds `main`).
 
 No `vX.Y.Z` tag has been cut for this repo yet (see BACKLOG.md and the
 NEEDS ANDREI at the end of this file); the rows above reflect the
@@ -95,6 +102,8 @@ a real, live break found and fixed in between (Session K, this repo's PRs
 | `GET /api/v1/secrets` (list, scoped) | ✅ | ✅ | ✅ | ✅ |
 | `GET /api/v1/secrets/{id}?include_value=true` | ✅ | ✅ | ✅ | ✅ |
 | `GET /api/v1/projects/{id}/secrets/deleted` (`purge_at`) | ✅ | ✅ | ✅ | ✅ |
+| `PUT /api/v1/secrets/{id}` (update: new version) | ✅ | ✅ | ✅ | ✅ |
+| `DELETE /api/v1/secrets/{id}` (soft delete, `Keyorix-Purge-At`) | ✅ | ✅ | ✅ | ✅ |
 
 The Java SDK's missing `createProject` is a real feature gap versus the
 other three (found during the SDKS track's 2026-09-25 inventory, not a
@@ -103,7 +112,7 @@ functionality, not a fix to something broken. See the `keyorix` repo's
 `~/proj/prompts/reports/SDKS.md` track report for the full inventory this
 table summarizes.
 
-This repo calls 9 of `server/http/handlers/openapi.yaml`'s 126+ documented
+This repo calls 11 of `server/http/handlers/openapi.yaml`'s 126+ documented
 paths (ADR-072 recorded a 4/126 baseline in 2026-08-04 before
 `ListProjects`/`CreateProject`/`ListEnvironments` were added). Generating
 SDK clients directly from the OpenAPI spec — ADR-072's own recorded

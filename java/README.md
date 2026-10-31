@@ -89,6 +89,38 @@ String dbPassword = client.getSecretIn("my-project", "production", "db-password"
 - client.listDeletedSecrets(projectId) -> List<Secret> — the project's
   soft-deleted secrets; `secret.getPurgeAt()` is the restore deadline (RFC 3339
   UTC; empty on live secrets). Needs server v0.96.0+.
+- client.updateSecret(project, environment, name, value) -> Secret — writes
+  `value` as a **new version** of the secret `name` (the rotation call) and
+  returns its metadata — never the value. Earlier versions are kept and a read
+  returns the new value. The name is resolved as for `getSecretScoped`
+  (`SecretNotFoundException` / `AmbiguousSecretException`; an ambiguous name
+  writes nothing). `value` must not be empty. Needs `secrets.write` on the
+  secret. `client.updateSecretById(secretId, value)` is the same call when you
+  already have the ID.
+  ```java
+  client.updateSecret("my-project", "production", "db-password", newPassword);
+  ```
+  **Known limitation:** the Java SDK's value *reads* (`getSecretScoped`,
+  `getSecretIn`, `getSecretByRef`) do not yet decode JSON escapes, so a value
+  containing `"`, `\`, a newline or a tab comes back still escaped (for example
+  `line1\nline2` instead of two lines). `updateSecret` writes the value
+  correctly and the server stores it correctly; only the Java read-back is
+  affected. Go, Node and Python are not.
+  The value is never put in an exception's message, and an echo of it in the
+  server's response is replaced with `[REDACTED]` in `getResponseBody()`. Under
+  heavy concurrent writes to the same secret the server answers 409; that is a
+  plain `KeyorixException` (`getStatusCode() == 409`): retry.
+- client.deleteSecret(project, environment, name) -> String — soft-deletes the
+  secret: it stops being readable at once but can be restored until the
+  returned purge date (RFC 3339 UTC; `listDeletedSecrets` lists it with the
+  same date). The date is `""` only if the server sent none (the delete still
+  succeeded). Deleting twice throws `NotFoundException` the second time. Needs
+  `secrets.delete` on the secret. `client.deleteSecretById(secretId)` is the
+  by-ID form. The server asks for no step-up or MFA for a delete; the SDK adds
+  none. Both calls throw `ForbiddenException` (403) when the token may not
+  write/delete that secret and `NotFoundException` (404) when no live secret
+  has that ID. The purge date needs server v0.96.0+; on an older server the
+  delete works and the date is `""`.
 - client.health() -> boolean
 
 `project`/`environment` each have two overloads: by name (`String`, resolved to

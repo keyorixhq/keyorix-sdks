@@ -124,6 +124,42 @@ Each has `PurgeAt` (`*time.Time`) set: the restore deadline, before which the
 server will not hard-delete it. `PurgeAt` is nil on live secrets. Needs server
 v0.96.0+.
 
+### `client.UpdateSecret(ctx, project ProjectRef, environment EnvironmentRef, name, value string) (*Secret, error)`
+Writes `value` as a **new version** of the secret `name` (the rotation call) and
+returns its metadata — never the value. Earlier versions are kept and a read
+returns the new value. The name is resolved exactly as for `GetSecretScoped`
+(`*SecretNotFoundError` / `*AmbiguousSecretError`; an ambiguous name writes
+nothing). `value` must not be empty. Needs `secrets.write` on the secret.
+`client.UpdateSecretByID(ctx, id uint, value string)` is the same call when you
+already have the ID.
+
+```go
+// Rotate a database password, then read it back.
+if _, err := client.UpdateSecret(ctx,
+    keyorix.ProjectByName("my-project"), keyorix.EnvironmentByName("production"),
+    "db-password", newPassword); err != nil {
+    log.Fatal(err) // never contains newPassword
+}
+```
+
+The value is never put in an error's text or in `APIError.Body` (an echo of it
+in the server's response is replaced with `[REDACTED]`). Under heavy concurrent writes to the same secret
+the server answers 409; that is a plain `*APIError` (`StatusCode` 409): retry.
+
+### `client.DeleteSecret(ctx, project ProjectRef, environment EnvironmentRef, name string) (*time.Time, error)`
+Soft-deletes the secret `name`: it stops being readable at once but can be
+restored until the returned **purge date**. `ListDeletedSecrets` lists it with
+the same date. The date is nil only if the server sent none (the delete still
+succeeded). Name resolution is as for `UpdateSecret`; deleting twice fails the
+second time with `*NotFoundError`. Needs `secrets.delete` on the secret.
+`client.DeleteSecretByID(ctx, id uint)` is the by-ID form. The server asks for
+no step-up or MFA for a delete; the SDK adds none.
+
+Both calls return `*ForbiddenError` (403) when the token may not write/delete
+that secret and `*NotFoundError` (404) when no live secret has that ID. The
+purge date needs server v0.96.0+; on an older server the delete works and the
+date is nil.
+
 ### `client.ListSecretsScoped(ctx, project ProjectRef, environment EnvironmentRef) ([]Secret, error)`
 Returns every secret within one project's environment, following every page
 the server reports.

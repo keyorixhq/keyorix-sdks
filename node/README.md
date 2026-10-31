@@ -78,6 +78,33 @@ Zero external dependencies. Uses Node.js built-in http/https modules.
 - client.listDeletedSecrets(project) -> Promise<Secret[]> — the project's
   soft-deleted secrets; `purgeAt` is the restore deadline (RFC 3339 UTC; absent
   on live secrets). Needs server v0.96.0+.
+- client.updateSecret(project, environment, name, value) -> Promise<object> —
+  writes `value` as a **new version** of the secret `name` (the rotation call)
+  and resolves with its metadata (`id`, `name`, `type`, `projectId`,
+  `createdAt`) — never the value. Earlier versions are kept and a read returns
+  the new value. The name is resolved as for `getSecretScoped`
+  (`SecretNotFoundError` / `AmbiguousSecretError`; an ambiguous name writes
+  nothing). `value` must be a non-empty string. Needs `secrets.write` on the
+  secret. `client.updateSecretById(id, value)` is the same call when you
+  already have the ID (`id` must be a positive integer).
+  ```js
+  await client.updateSecret('my-project', 'production', 'db-password', newPassword);
+  ```
+  The value is never put in an error's message, and an echo of it in the
+  server's response is replaced with `[REDACTED]` in `err.responseBody`. Under
+  heavy concurrent writes to the same secret the server answers 409; that is a
+  plain `KeyorixError` (`err.statusCode === 409`): retry.
+- client.deleteSecret(project, environment, name) -> Promise<{purgeAt}> —
+  soft-deletes the secret: it stops being readable at once but can be restored
+  until `purgeAt` (RFC 3339 UTC; `listDeletedSecrets` lists it with the same
+  date). `purgeAt` is `null` only if the server sent none (the delete still
+  succeeded). Deleting twice throws `NotFoundError` the second time. Needs
+  `secrets.delete` on the secret. `client.deleteSecretById(id)` is the by-ID
+  form. The server asks for no step-up or MFA for a delete; the SDK adds none.
+  Both calls throw `ForbiddenError` (403) when the token may not write/delete
+  that secret and `NotFoundError` (404) when no live secret has that ID. The
+  purge date needs server v0.96.0+; on an older server the delete works and
+  `purgeAt` is `null`.
 - client.health() -> Promise<boolean>
 
 `project`/`environment` each accept either a name (`string`, resolved to an ID
