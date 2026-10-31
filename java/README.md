@@ -100,6 +100,12 @@ String dbPassword = client.getSecretIn("my-project", "production", "db-password"
   ```java
   client.updateSecret("my-project", "production", "db-password", newPassword);
   ```
+  **Known limitation:** the Java SDK's value *reads* (`getSecretScoped`,
+  `getSecretIn`, `getSecretByRef`) do not yet decode JSON escapes, so a value
+  containing `"`, `\`, a newline or a tab comes back still escaped (for example
+  `line1\nline2` instead of two lines). `updateSecret` writes the value
+  correctly and the server stores it correctly; only the Java read-back is
+  affected. Go, Node and Python are not.
   The value is never put in an exception's message, and an echo of it in the
   server's response is replaced with `[REDACTED]` in `getResponseBody()`. Under
   heavy concurrent writes to the same secret the server answers 409; that is a
