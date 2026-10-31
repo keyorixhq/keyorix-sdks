@@ -339,6 +339,19 @@ func TestContract_FullClientSurface(t *testing.T) {
 		if got != secretValue {
 			t.Errorf("GetSecretScoped: got value %q, want %q", got, secretValue)
 		}
+
+		// JSON escapes: newline, tab, CR, quote, backslash, trailing backslash, a C0
+		// control char, HTML-sensitive chars, U+2028, non-ASCII, an astral char.
+		escName := fmt.Sprintf("contract-escapes-%d", time.Now().UnixNano())
+		escValue := "line1\nline2 \"q\" back\\slash\t\r<a href=\"x\">&</a> \x01   café \U0001F600 end\\"
+		seedSecret(t, serverURL, token, defaultProjectID, devEnvID, escName, escValue)
+		escGot, err := client.GetSecretScoped(ctx, escName, ProjectByID(defaultProjectID), EnvironmentByName("development"))
+		if err != nil {
+			t.Fatalf("GetSecretScoped (escapes): %v", err)
+		}
+		if !bytes.Equal([]byte(escGot), []byte(escValue)) {
+			t.Errorf("GetSecretScoped (escapes): got %q, want %q", escGot, escValue)
+		}
 	})
 
 	t.Run("New works transparently with a PAT, not just a session token", func(t *testing.T) {

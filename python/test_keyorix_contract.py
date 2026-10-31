@@ -176,6 +176,21 @@ class TestContractFullClientSurface(unittest.TestCase):
         value = self.client.get_secret_scoped(secret_name, default.id, dev_env.id)
         self.assertEqual(value, secret_value)
 
+    def test_secret_with_json_escapes_round_trips_byte_for_byte(self):
+        projects = self.client.list_projects()
+        default = next(p for p in projects if p.name == "default")
+        envs = self.client.list_environments(default.id)
+        dev_env = next(e for e in envs if e.name == "development")
+
+        # newline, tab, CR, quote, backslash, a trailing backslash, a C0 control
+        # char, HTML-sensitive chars, U+2028, non-ASCII, an astral char.
+        value = 'line1\nline2 "q" back\\slash\t\r<a href="x">&</a> \x01   café \U0001F600 end\\'
+        name = f"contract-escapes-{time.time_ns()}"
+        _seed_secret(self.token, default.id, dev_env.id, name, value)
+
+        got = self.client.get_secret_scoped(name, default.id, dev_env.id)
+        self.assertEqual(got.encode("utf-8"), value.encode("utf-8"))
+
     def test_deleted_secret_exposes_purge_at(self):
         projects = self.client.list_projects()
         default = next(p for p in projects if p.name == "default")
