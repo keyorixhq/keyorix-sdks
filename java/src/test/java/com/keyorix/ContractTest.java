@@ -272,6 +272,85 @@ class ContractTest {
         assertThrows(AuthException.class, badClient::listProjects);
     }
 
+    private static String getBody(String url, String bearerToken) throws IOException {
+        HttpURLConnection conn = (HttpURLConnection) new URL(url).openConnection();
+        conn.setRequestMethod("GET");
+        conn.setRequestProperty("Authorization", "Bearer " + bearerToken);
+        int status = conn.getResponseCode();
+        if (status != 200) throw new IllegalStateException("GET " + url + ": unexpected status " + status);
+        try (InputStream is = conn.getInputStream()) {
+            return new String(is.readAllBytes(), StandardCharsets.UTF_8);
+        } finally {
+            conn.disconnect();
+        }
+    }
+
+    /** The secret's version numbers, newest first, read over raw HTTP (the SDK has no
+     * version listing and the update response carries no version). */
+    private static List<Integer> versionNumbers(long secretId) throws IOException {
+        java.util.regex.Matcher m = java.util.regex.Pattern.compile("\"VersionNumber\":(\\d+)")
+            .matcher(getBody(serverUrl + "/api/v1/secrets/" + secretId + "/versions", token));
+        List<Integer> nums = new java.util.ArrayList<>();
+        while (m.find()) nums.add(Integer.parseInt(m.group(1)));
+        return nums;
+    }
+
+    private static double daysUntil(String rfc3339) {
+        return java.time.Duration.between(java.time.Instant.now(), java.time.Instant.parse(rfc3339)).toSeconds() / 86400.0;
+    }
+
+    @Test
+    void updateThenDeleteSecret() throws Exception {
+        Project defaultProject = client.listProjects().stream()
+                .filter(p -> p.getName().equals("default")).findFirst().orElseThrow();
+        Environment devEnv = client.listEnvironments(defaultProject.getId()).stream()
+                .filter(e -> e.getName().equals("development")).findFirst().orElseThrow();
+        long projectId = defaultProject.getId();
+        long envId = devEnv.getId();
+
+        String name = "contract-upd-del-" + System.nanoTime();
+        seedSecret(projectId, envId, name, "value-one");
+        long id = client.listSecretsScoped(projectId, envId).stream()
+                .filter(s -> s.getName().equals(name)).findFirst().orElseThrow().getId();
+        assertEquals(1, versionNumbers(id).size(), "a fresh secret has exactly one version");
+
+        // update: new version, new value readable
+        Secret updated = client.updateSecret(projectId, envId, name, "value-two");
+        assertEquals(id, updated.getId());
+        assertEquals(name, updated.getName());
+        assertEquals("value-two", client.getSecretScoped(name, projectId, envId));
+        assertEquals(List.of(2, 1), versionNumbers(id));
+
+        client.updateSecretById(id, "value-three");
+        assertEquals("value-three", client.getSecretScoped(name, projectId, envId));
+        assertEquals(List.of(3, 2, 1), versionNumbers(id));
+
+        // 403: a zero-grant machine token may neither update nor delete
+        KeyorixClient machine = Keyorix.newClient(serverUrl, createMachineToken(token, projectId));
+        assertThrows(ForbiddenException.class, () -> machine.updateSecretById(id, "attacker-value"));
+        assertThrows(ForbiddenException.class, () -> machine.deleteSecretById(id));
+        assertEquals("value-three", client.getSecretScoped(name, projectId, envId), "refused calls changed nothing");
+
+        // delete: soft delete with a purge date
+        String purgeAt = client.deleteSecret(projectId, envId, name);
+        assertFalse(purgeAt.isEmpty(), "the server sends Keyorix-Purge-At");
+        double days = daysUntil(purgeAt);
+        assertTrue(days > 29 && days < 31, "purge date " + purgeAt + " is not ~30 days out");
+        assertThrows(SecretNotFoundException.class, () -> client.getSecretScoped(name, projectId, envId));
+        Secret listed = client.listDeletedSecrets(projectId).stream()
+                .filter(s -> s.getId() == id).findFirst().orElse(null);
+        assertNotNull(listed, "a deleted secret is listed by listDeletedSecrets");
+        assertTrue(Math.abs(java.time.Duration.between(
+                java.time.Instant.parse(purgeAt), java.time.Instant.parse(listed.getPurgeAt())).getSeconds()) <= 2,
+            "the listed purgeAt matches the one deleteSecret returned");
+
+        // 404: a deleted secret can be neither updated nor deleted again
+        assertThrows(NotFoundException.class, () -> client.updateSecretById(id, "late"));
+        assertThrows(NotFoundException.class, () -> client.deleteSecretById(id));
+        assertThrows(SecretNotFoundException.class, () -> client.updateSecret(projectId, envId, name, "late"));
+        assertThrows(SecretNotFoundException.class, () -> client.deleteSecret(projectId, envId, name));
+    }
+
     @Test
     void timeoutIsEnforcedAgainstASlowServer() throws Exception {
         com.sun.net.httpserver.HttpServer slow =
