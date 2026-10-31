@@ -4,6 +4,15 @@ All notable changes to the Java SDK are documented here.
 
 ## Unreleased
 
+### Fixed
+
+- A secret value (or any string the SDK reads) containing JSON string escapes
+  now comes back exactly as stored. `JsonParser` returned the raw escaped text,
+  so `line1\nline2 "q"` arrived as `line1\\nline2 \\"q\\"`, and a value ending
+  in a backslash was cut at the wrong quote. It now decodes `\" \\ \/ \b \f \n
+  \r \t` and `\uXXXX` (surrogate pairs included); a malformed escape throws
+  `IllegalArgumentException` instead of returning an altered value.
+
 ### Added
 
 - `login` on an account with a second factor (MFA, the server default) now throws/raises/returns a typed MFA-required error carrying the challenge id and the available methods, instead of a generic "no token in login response". Complete it with the new `verifyMfa`/`verify_mfa`/`VerifyMFA` (TOTP or recovery code). Node, Python and Java: the new type extends the auth error `login` already threw, so existing handlers keep working.

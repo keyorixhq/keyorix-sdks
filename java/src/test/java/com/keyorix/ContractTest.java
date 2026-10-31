@@ -209,6 +209,48 @@ class ContractTest {
         assertEquals(secretValue, value);
     }
 
+    /** Minimal JSON string literal encoder for the test's raw create request. */
+    private static String jsonQuote(String s) {
+        StringBuilder sb = new StringBuilder("\"");
+        for (char c : s.toCharArray()) {
+            switch (c) {
+                case '"': sb.append("\\\""); break;
+                case '\\': sb.append("\\\\"); break;
+                case '\n': sb.append("\\n"); break;
+                case '\r': sb.append("\\r"); break;
+                case '\t': sb.append("\\t"); break;
+                default:
+                    if (c < 0x20) sb.append(String.format("\\u%04x", (int) c));
+                    else sb.append(c);
+            }
+        }
+        return sb.append('"').toString();
+    }
+
+    @Test
+    void secretWithJsonEscapesRoundTripsByteForByte() throws Exception {
+        Project defaultProject = client.listProjects().stream()
+                .filter(p -> p.getName().equals("default")).findFirst().orElseThrow();
+        Environment devEnv = client.listEnvironments(defaultProject.getId()).stream()
+                .filter(e -> e.getName().equals("development")).findFirst().orElseThrow();
+
+        // newline, tab, CR, quote, backslash, a trailing backslash, a C0 control char,
+        // HTML-sensitive chars (Go's encoder writes <>& as < > &),
+        // U+2028 (written as  ), non-ASCII, and an astral char (surrogate pair).
+        String value = "line1\nline2 \"q\" back\\slash\t\r<a href=\"x\">&</a> \u0001   café 😀 end\\";
+        String name = "contract-escapes-" + System.nanoTime();
+        String body = "{\"name\":" + jsonQuote(name) + ",\"value\":" + jsonQuote(value)
+                + ",\"project_id\":" + defaultProject.getId() + ",\"environment_id\":" + devEnv.getId()
+                + ",\"type\":\"generic\"}";
+        int status = postJson(serverUrl + "/api/v1/secrets", body, token);
+        assertTrue(status < 300, "POST /api/v1/secrets: unexpected status " + status);
+
+        String got = client.getSecretScoped(name, defaultProject.getId(), devEnv.getId());
+        assertArrayEquals(value.getBytes(StandardCharsets.UTF_8), got.getBytes(StandardCharsets.UTF_8),
+            "secret value must come back byte-for-byte; got: " + got);
+        assertEquals(value, got);
+    }
+
     @Test
     void deletedSecretExposesPurgeAt() throws Exception {
         Project defaultProject = client.listProjects().stream()
