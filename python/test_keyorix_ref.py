@@ -78,7 +78,7 @@ class TestGetSecretByRefErrorMapping(unittest.TestCase):
     """Reuses the existing typed 401/403/404 errors from #40 -- no second
     error set."""
 
-    @patch("keyorix.urllib.request.urlopen")
+    @patch("keyorix._urlopen")
     def test_401_maps_to_auth_error(self, mock_urlopen):
         mock_urlopen.side_effect = urllib.error.HTTPError(
             "http://localhost:8080/api/v1/secrets/value", 401, "Unauthorized", {}, io.BytesIO(b"")
@@ -87,7 +87,7 @@ class TestGetSecretByRefErrorMapping(unittest.TestCase):
         with self.assertRaises(keyorix.AuthError):
             client.get_secret_by_ref("p/e/n")
 
-    @patch("keyorix.urllib.request.urlopen")
+    @patch("keyorix._urlopen")
     def test_403_maps_to_forbidden_error(self, mock_urlopen):
         mock_urlopen.side_effect = urllib.error.HTTPError(
             "http://localhost:8080/api/v1/secrets/value", 403, "Forbidden", {}, io.BytesIO(b"")
@@ -96,7 +96,7 @@ class TestGetSecretByRefErrorMapping(unittest.TestCase):
         with self.assertRaises(keyorix.ForbiddenError):
             client.get_secret_by_ref("p/e/n")
 
-    @patch("keyorix.urllib.request.urlopen")
+    @patch("keyorix._urlopen")
     def test_404_maps_to_not_found_error(self, mock_urlopen):
         mock_urlopen.side_effect = urllib.error.HTTPError(
             "http://localhost:8080/api/v1/secrets/value", 404, "Not Found", {}, io.BytesIO(b"")
@@ -105,7 +105,7 @@ class TestGetSecretByRefErrorMapping(unittest.TestCase):
         with self.assertRaises(keyorix.NotFoundError):
             client.get_secret_by_ref("p/e/n")
 
-    @patch("keyorix.urllib.request.urlopen")
+    @patch("keyorix._urlopen")
     def test_400_does_not_map_to_a_typed_401_403_404_error(self, mock_urlopen):
         mock_urlopen.side_effect = urllib.error.HTTPError(
             "http://localhost:8080/api/v1/secrets/value", 400, "Bad Request", {}, io.BytesIO(b"")

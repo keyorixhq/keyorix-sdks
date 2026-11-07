@@ -13,10 +13,26 @@ get_secret_in/get_secret_by_ref resolve and authorize in one round trip and
 need no project/environment-list permission. get_secret_scoped/
 list_secrets_scoped are the alternative when you already have (or want to
 cache) project/environment IDs rather than names.
+
+Redirects: this SDK never follows an HTTP redirect. A 3xx response (301, 302,
+303, 307, 308) is raised as a KeyorixError carrying the status code, for every
+request, authenticated or not. The Keyorix API does not redirect, and
+following a redirect from an authenticated request could carry the bearer
+token to a different origin. If you front the server with something that
+redirects, point server_url at the final address instead.
+
+Token and server URL: the token must consist of printable ASCII characters
+(a trailing newline is rejected when the Client is constructed), and
+server_url must be a plain https:// URL, or an http:// URL whose host is
+literally localhost, a dotted-quad 127.x.y.z address or [::1]. URLs with
+embedded credentials, backslashes, whitespace or control characters, an
+invalid port, or shorthand loopback forms such as 127.1 are rejected.
+Error messages never contain the token.
 """
 
 import ipaddress
 import json
+import re
 import ssl
 import urllib.error
 import urllib.parse
@@ -53,15 +69,26 @@ class KeyorixError(Exception):
         self.code = code
 
 
+_DOTTED_QUAD = re.compile(r"(?:0|[1-9][0-9]{0,2})(?:\.(?:0|[1-9][0-9]{0,2})){3}")
+_PLAIN_HOST = re.compile(r"[A-Za-z0-9._-]+")
+
+
 def _is_loopback_host(host: Optional[str]) -> bool:
-    if host is None:
+    """Strict loopback check: "localhost", a canonical dotted-quad IPv4
+    address in 127.0.0.0/8, or an unscoped IPv6 loopback address. Shorthand
+    forms (127.1, 2130706433, 0x7f.0.0.1) are not loopback here."""
+    if not host:
         return False
     if host.lower() == "localhost":
         return True
     try:
-        return ipaddress.ip_address(host).is_loopback
+        if _DOTTED_QUAD.fullmatch(host):
+            return ipaddress.IPv4Address(host).is_loopback
+        if ":" in host and "%" not in host:
+            return ipaddress.IPv6Address(host).is_loopback
     except ValueError:
         return False
+    return False
 
 
 def _validate_server_url(server_url: str) -> None:
@@ -71,17 +98,94 @@ def _validate_server_url(server_url: str) -> None:
     in cleartext, and an unrestricted scheme (e.g. file://) would let a
     caller-influenced server_url reach something other than an HTTP server
     entirely.
+
+    The URL is also rejected if it contains backslashes, whitespace or
+    control characters, embedded credentials (userinfo), an
+    empty or invalid port, or a host that is not a plain DNS name or IP
+    literal. Together these keep the host checked here identical to the host
+    the connection is made to. The URL is not echoed in error messages, as it
+    may carry credentials.
     """
-    parsed = urllib.parse.urlsplit(server_url)
+    if not isinstance(server_url, str):
+        raise KeyorixError("server_url must be a string")
+    for ch in server_url:
+        if ch == "\\" or ord(ch) <= 0x20 or ord(ch) == 0x7F or ch.isspace():
+            raise KeyorixError("server_url contains a backslash, whitespace or control character")
+    try:
+        parsed = urllib.parse.urlsplit(server_url)
+        host = parsed.hostname
+        port = parsed.port
+    except ValueError:
+        raise KeyorixError("server_url is not a valid URL (check the host and port)") from None
+    if "@" in parsed.netloc or parsed.username is not None or parsed.password is not None:
+        raise KeyorixError("server_url must not contain credentials (user:password@)")
+    if parsed.netloc.endswith(":") or port == 0:
+        raise KeyorixError("server_url has an invalid port")
     scheme = parsed.scheme.lower()
+    if scheme not in ("http", "https"):
+        raise KeyorixError("server_url must use https:// (http:// is only allowed for localhost/loopback)")
+    if not host:
+        raise KeyorixError("server_url has no host")
+    if not host.isascii():
+        # Internationalised host name: check the form the connection will use.
+        try:
+            host = host.encode("idna").decode("ascii")
+        except UnicodeError:
+            raise KeyorixError("server_url has an invalid host") from None
+    if not (_PLAIN_HOST.fullmatch(host) or (":" in host and _is_ipv6_literal(host))):
+        raise KeyorixError("server_url has an invalid host")
     if scheme == "https":
         return
-    if scheme == "http" and _is_loopback_host(parsed.hostname):
+    # Loopback is judged on the host exactly as written (no IDNA mapping).
+    if _is_loopback_host(parsed.hostname):
         return
-    raise KeyorixError(
-        f"server_url {server_url!r} must use https:// "
-        "(http:// is only allowed for localhost/loopback)"
-    )
+    raise KeyorixError("server_url must use https:// (http:// is only allowed for localhost/loopback)")
+
+
+def _is_ipv6_literal(host: str) -> bool:
+    """True if host is a syntactically valid, unscoped IPv6 literal."""
+    if "%" in host:
+        return False
+    try:
+        ipaddress.IPv6Address(host)
+    except ValueError:
+        return False
+    return True
+
+
+def _validate_token(token: str) -> None:
+    """Reject a token the HTTP layer cannot carry (control characters such as
+    CR/LF/NUL, e.g. a trailing newline, or non-ASCII). The message never
+    contains the token."""
+    if not isinstance(token, str):
+        raise KeyorixError("token must be a string")
+    for ch in token:
+        if ord(ch) < 0x20 or ord(ch) >= 0x7F:
+            raise KeyorixError(
+                "token contains a control or non-ASCII character (check for a trailing newline)"
+            )
+
+
+class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """Never follow a redirect: returning None makes urllib raise the 3xx
+    response as an HTTPError, which callers map to KeyorixError."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+def _urlopen(req, timeout, context=None):
+    """urlopen without redirect following. A ValueError raised while sending
+    (e.g. an invalid header value) is re-raised as KeyorixError without the
+    original message, which can contain the raw header value."""
+    handlers = [_NoRedirectHandler()]
+    if context is not None:
+        handlers.append(urllib.request.HTTPSHandler(context=context))
+    opener = urllib.request.build_opener(*handlers)
+    try:
+        return opener.open(req, timeout=timeout)
+    except ValueError:
+        raise KeyorixError("Request could not be sent: invalid request value") from None
 
 
 class AuthError(KeyorixError):
@@ -313,7 +417,7 @@ def _auth_request(server_url: str, path: str, payload: dict, timeout: int, what:
         method="POST",
     )
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
+        with _urlopen(req, timeout) as resp:
             data = json.loads(resp.read()).get("data", {})
     except urllib.error.HTTPError as e:
         body = e.read().decode(errors="replace")
@@ -350,6 +454,7 @@ class Client:
 
     def __init__(self, server_url: str, token: str, timeout: int = 30, ca_file: Optional[str] = None):
         _validate_server_url(server_url)
+        _validate_token(token)
         self._base = server_url.rstrip("/")
         self._token = token
         self._timeout = timeout
@@ -368,7 +473,7 @@ class Client:
             method=method,
         )
         try:
-            with urllib.request.urlopen(req, timeout=self._timeout, context=self._ssl_context) as resp:
+            with _urlopen(req, self._timeout, self._ssl_context) as resp:
                 return json.loads(resp.read())
         except urllib.error.HTTPError as e:
             body = e.read().decode(errors="replace")
@@ -392,7 +497,7 @@ class Client:
             method="GET",
         )
         try:
-            with urllib.request.urlopen(req, timeout=self._timeout, context=self._ssl_context) as resp:
+            with _urlopen(req, self._timeout, self._ssl_context) as resp:
                 return resp.status == 200
         except urllib.error.URLError as e:
             raise KeyorixError(f"Server unreachable: {e}") from e
@@ -621,7 +726,7 @@ class Client:
             method="POST",
         )
         try:
-            with urllib.request.urlopen(req, timeout=self._timeout, context=self._ssl_context) as resp:
+            with _urlopen(req, self._timeout, self._ssl_context) as resp:
                 data = json.loads(resp.read())
                 return Project._from_dict(data.get("data", {}))
         except urllib.error.HTTPError as e:
