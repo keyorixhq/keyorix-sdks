@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strings"
 	"testing"
 	"time"
 )
@@ -534,4 +535,77 @@ func TestContract_DeletedSecretPurgeAt(t *testing.T) {
 		return
 	}
 	t.Fatalf("soft-deleted secret %d not in ListDeletedSecrets (%d entries)", id, len(deleted))
+}
+
+// CreateSecret against the real server: create by name, read the value back
+// through the SDK's own getters, then the two negative cases.
+func TestContract_CreateSecret(t *testing.T) {
+	serverURL := contractServerURL(t)
+	token := seedAdminSession(t, serverURL)
+	client, err := New(serverURL, token)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	project, env := ProjectByName("default"), EnvironmentByName("development")
+	name := fmt.Sprintf("contract-create-%d", time.Now().UnixNano())
+	value := "contract-create-value-do-not-use"
+
+	created, err := client.CreateSecret(ctx, project, env, name, value, WithSecretDescription("created by the Go SDK contract test"))
+	if err != nil {
+		t.Fatalf("CreateSecret: %v", err)
+	}
+	if created.ID == 0 || created.Name != name || created.Type != "generic" || created.ProjectID == 0 {
+		t.Errorf("CreateSecret: unexpected node %+v", created)
+	}
+
+	t.Run("read back by value and in the listing", func(t *testing.T) {
+		got, err := client.GetSecretScoped(ctx, name, project, env)
+		if err != nil {
+			t.Fatalf("GetSecretScoped: %v", err)
+		}
+		if got != value {
+			t.Errorf("GetSecretScoped: got %q, want %q", got, value)
+		}
+		listed, err := client.ListSecretsScoped(ctx, project, env)
+		if err != nil {
+			t.Fatalf("ListSecretsScoped: %v", err)
+		}
+		var found bool
+		for _, s := range listed {
+			found = found || s.ID == created.ID
+		}
+		if !found {
+			t.Errorf("created secret %d not in ListSecretsScoped (%d entries)", created.ID, len(listed))
+		}
+	})
+
+	t.Run("a duplicate name is *SecretAlreadyExistsError and never echoes the value", func(t *testing.T) {
+		_, err := client.CreateSecret(ctx, project, env, name, value)
+		var exists *SecretAlreadyExistsError
+		if !errors.As(err, &exists) {
+			t.Fatalf("got %T (%v), want *SecretAlreadyExistsError", err, err)
+		}
+		if exists.StatusCode != http.StatusConflict || strings.Contains(err.Error(), value) || strings.Contains(exists.Body, value) {
+			t.Errorf("unexpected duplicate error: status %d, text %q, body %q", exists.StatusCode, err.Error(), exists.Body)
+		}
+	})
+
+	t.Run("an unauthenticated call is *AuthError", func(t *testing.T) {
+		for _, tok := range []string{"not-a-valid-token", ""} {
+			bad, err := New(serverURL, tok)
+			if err != nil {
+				t.Fatalf("New: %v", err)
+			}
+			// By ID, so the 401 comes from POST /api/v1/secrets itself and not
+			// from the project lookup a by-name call would do first.
+			_, err = bad.CreateSecret(ctx, ProjectByID(created.ProjectID), EnvironmentByID(1), name+"-anon", value)
+			var authErr *AuthError
+			if !errors.As(err, &authErr) {
+				t.Errorf("token %q: got %T (%v), want *AuthError", tok, err, err)
+			}
+		}
+	})
 }

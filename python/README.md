@@ -101,6 +101,12 @@ Zero dependencies — stdlib only. Or just copy keyorix.py into your project.
   write/delete that secret and `NotFoundError` (404) when no live secret has
   that ID. The purge date needs server v0.96.0+; on an older server the delete
   works and the result is `None`.
+- client.create_secret(project, environment, name, value, *, type="generic", description="") ->
+  Secret — creates a secret (`POST /api/v1/secrets`) and returns its metadata,
+  never the value. Needs `secrets.write` in the scope. A name already taken in
+  the scope raises `SecretAlreadyExistsError`. The value never appears in an
+  exception message, and any echo of it by the server is stripped from
+  `response_body`.
 - client.health() -> bool
 
 `project`/`environment` each accept either a name (`str`, resolved to an ID via
@@ -127,6 +133,7 @@ server — use `get_secret_scoped`/`list_secrets_scoped` instead.
 - NotFoundError — resource not found (HTTP 404), which is what
   `get_secret_in`/`get_secret_by_ref` raise for a missing secret, project or environment
 - SecretNotFoundError — raised by `get_secret_scoped` when no secret in the scope has that name
+- SecretAlreadyExistsError — raised by `create_secret` when the name is already taken in the scope (HTTP 409)
 - AmbiguousSecretError — secret name matched more than one secret in scope (`.ids`)
 
 ## Requirements
