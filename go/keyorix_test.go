@@ -285,3 +285,28 @@ func TestErrorForResponse_SecretReadRefusals(t *testing.T) {
 		})
 	}
 }
+
+// A server URL copied with trailing slashes must not produce "//api/..." request
+// paths: the server answers those with a redirect, which turns a POST into a GET
+// (405 on create).
+func TestNew_trimsTrailingSlashesFromServerURL(t *testing.T) {
+	var gotPath string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+	for _, suffix := range []string{"/", "//"} {
+		c, err := New(srv.URL+suffix, "tok")
+		if err != nil {
+			t.Fatal(err)
+		}
+		gotPath = ""
+		if err := c.Health(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		if gotPath != "/health" {
+			t.Errorf("suffix %q: request path = %q, want /health", suffix, gotPath)
+		}
+	}
+}

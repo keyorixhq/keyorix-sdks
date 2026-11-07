@@ -4,8 +4,20 @@ All notable changes to the Java SDK are documented here.
 
 ## Unreleased
 
+### Fixed
+
+- A secret value (or any string the SDK reads) containing JSON string escapes
+  now comes back exactly as stored. `JsonParser` returned the raw escaped text,
+  so `line1\nline2 "q"` arrived as `line1\\nline2 \\"q\\"`, and a value ending
+  in a backslash was cut at the wrong quote. It now decodes `\" \\ \/ \b \f \n
+  \r \t` and `\uXXXX` (surrogate pairs included); a malformed escape throws
+  `IllegalArgumentException` instead of returning an altered value.
+
 ### Added
 
+- `KeyorixClient.updateSecret(project, environment, name, value)` / `updateSecretById(secretId, value)` (`PUT /api/v1/secrets/{id}`): write a new version of a secret, for scripted rotation. `KeyorixClient.deleteSecret(project, environment, name)` / `deleteSecretById(secretId)` (`DELETE /api/v1/secrets/{id}`): soft-delete, returning the purge date (RFC 3339, `""` if the server sent none). Typed exceptions as elsewhere (`ForbiddenException`, `NotFoundException`, `SecretNotFoundException`, `AmbiguousSecretException`); the value never appears in an exception or in `getResponseBody()`; an empty value is refused before any request. The value is encoded with a full JSON string escaper, so a multi-line value is valid JSON. The purge date needs server v0.96.0+.
+- `KeyorixClient.createProject(name, description)` (`POST /api/v1/projects`), matching the other three SDKs; the Java SDK was the only one without it.
+- `KeyorixClient.createSecret(project, environment, name, value[, type, description])` creates a secret (`POST /api/v1/secrets`) in a project+environment given by name or ID and returns its metadata. A taken name throws the new `SecretAlreadyExistsException`. The value never appears in an exception message and is stripped from `getResponseBody()` if the server echoes it.
 - `login` on an account with a second factor (MFA, the server default) now throws/raises/returns a typed MFA-required error carrying the challenge id and the available methods, instead of a generic "no token in login response". Complete it with the new `verifyMfa`/`verify_mfa`/`VerifyMFA` (TOTP or recovery code). Node, Python and Java: the new type extends the auth error `login` already threw, so existing handlers keep working.
 - `KeyorixException.getErrorCode()` carries the server's stable error code, and a value read the secret's own state refuses (server ERRMAP-1) is typed: 409 `SecretExpired` / `SecretSuspended` / `SecretMaxReadsExhausted` throws `SecretUnavailableException`; a read outside the secret's access schedule stays `ForbiddenException` (code `SecretAccessOutsideSchedule`) with an accurate message. Messages are local, never the server's body.
 - `Secret.getPurgeAt()` and `KeyorixClient.listDeletedSecrets(projectId)`
