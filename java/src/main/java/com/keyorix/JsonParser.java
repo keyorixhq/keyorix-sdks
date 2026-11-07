@@ -32,6 +32,11 @@ class JsonParser {
         return result;
     }
 
+    /** Parse the secret node from an update response: {"data":{"id":...,"name":...}}; null if unparseable. */
+    static Secret parseSecretResponse(String json) {
+        return parseSecret(json);
+    }
+
     /** Parse the recycle bin from: {"data":{"deleted":[...]}}; purge_at becomes {@link Secret#getPurgeAt()}. */
     static List<Secret> parseDeletedSecretList(String json, long projectId) {
         List<String> objects = extractArrayObjects(json, "deleted");

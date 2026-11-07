@@ -23,6 +23,10 @@ import urllib.request
 
 import keyorix
 
+# contract.yml runs only this module; the update/delete cases live in their own
+# file and are pulled in here so CI runs them.
+from test_update_delete_contract import ContractUpdateDeleteTests  # noqa: F401
+
 SERVER_URL = os.environ.get("KEYORIX_CONTRACT_SERVER_URL", "")
 BOOTSTRAP_TOKEN = os.environ.get("KEYORIX_CONTRACT_BOOTSTRAP_TOKEN", "")
 
