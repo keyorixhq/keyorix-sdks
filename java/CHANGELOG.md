@@ -4,6 +4,15 @@ All notable changes to the Java SDK are documented here.
 
 ## Unreleased
 
+### Fixed
+
+- A secret value (or any string the SDK reads) containing JSON string escapes
+  now comes back exactly as stored. `JsonParser` returned the raw escaped text,
+  so `line1\nline2 "q"` arrived as `line1\\nline2 \\"q\\"`, and a value ending
+  in a backslash was cut at the wrong quote. It now decodes `\" \\ \/ \b \f \n
+  \r \t` and `\uXXXX` (surrogate pairs included); a malformed escape throws
+  `IllegalArgumentException` instead of returning an altered value.
+
 ### Added
 
 - `KeyorixClient.updateSecret(project, environment, name, value)` / `updateSecretById(secretId, value)` (`PUT /api/v1/secrets/{id}`): write a new version of a secret, for scripted rotation. `KeyorixClient.deleteSecret(project, environment, name)` / `deleteSecretById(secretId)` (`DELETE /api/v1/secrets/{id}`): soft-delete, returning the purge date (RFC 3339, `""` if the server sent none). Typed exceptions as elsewhere (`ForbiddenException`, `NotFoundException`, `SecretNotFoundException`, `AmbiguousSecretException`); the value never appears in an exception or in `getResponseBody()`; an empty value is refused before any request. The value is encoded with a full JSON string escaper, so a multi-line value is valid JSON. The purge date needs server v0.96.0+.
