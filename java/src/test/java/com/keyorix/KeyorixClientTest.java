@@ -298,4 +298,44 @@ class KeyorixClientTest {
         java.util.List<Secret> secrets = JsonParser.parseSecretList(json);
         assertTrue(secrets.isEmpty());
     }
+
+    // ── Token handling ──────────────────────────────────────────────────────────
+
+    @ParameterizedTest
+    @ValueSource(strings = {
+        "abc\r\nX-Injected: 1",
+        "abc\n",
+        "abc\r",
+        "abc\u0000def",
+        "abc\tdef",
+        "abc\u007fdef",
+        "t\u00f6ken"
+    })
+    void testClientRejectsTokenWithControlCharacters(String token) {
+        KeyorixException ex = assertThrows(KeyorixException.class,
+            () -> new KeyorixClient("http://localhost:8080", token));
+        assertFalse(ex.getMessage().contains("abc"), "message must not contain the token");
+        assertFalse(ex.getMessage().contains("X-Injected"), "message must not contain the token");
+        assertFalse(ex.getMessage().contains("\u00f6"), "message must not contain the token");
+    }
+
+    @Test
+    void testClientAcceptsOrdinaryTokens() throws KeyorixException {
+        assertNotNull(new KeyorixClient("http://localhost:8080", "a.b-c_d~e+f/g="));
+        assertNotNull(new KeyorixClient("http://localhost:8080", ""));
+    }
+
+    // Defence in depth: if an invalid value reaches the request layer anyway,
+    // the JDK's message, which contains the raw header value, must not reach
+    // the caller.
+    @Test
+    void testInvalidHeaderValueIsWrappedWithoutTheToken() throws Exception {
+        java.net.HttpURLConnection conn =
+            (java.net.HttpURLConnection) new java.net.URL("http://localhost:1/").openConnection();
+        IOException ex = assertThrows(IOException.class,
+            () -> KeyorixClient.setAuthorization(conn, "abc\r\nX-Injected: 1"));
+        assertFalse(String.valueOf(ex.getMessage()).contains("abc"));
+        assertFalse(String.valueOf(ex.getMessage()).contains("X-Injected"));
+        assertNull(ex.getCause());
+    }
 }
