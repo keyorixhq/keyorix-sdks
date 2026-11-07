@@ -9,6 +9,21 @@ export interface Secret {
   purgeAt?: string;
 }
 
+export interface CreateSecretOptions {
+  /** Secret type; defaults to "generic". */
+  type?: string;
+  /** Free-text note (metadata only, never the value). */
+  description?: string;
+}
+
+export interface CreatedSecret {
+  id: number;
+  name: string;
+  type: string;
+  projectId: number;
+  environmentId: number;
+}
+
 export interface Project {
   id: number;
   name: string;
@@ -49,6 +64,8 @@ export declare class NotFoundError extends KeyorixError {}
 /** 409: the secret has expired, is suspended or used up its max reads (see errorCode). */
 export declare class SecretUnavailableError extends KeyorixError {}
 export declare class SecretNotFoundError extends KeyorixError {}
+/** createSecret: a live secret of that name already exists in the scope (409). */
+export declare class SecretAlreadyExistsError extends KeyorixError {}
 export declare class AmbiguousSecretError extends KeyorixError {
   ids: number[];
 }
@@ -78,6 +95,14 @@ export declare class Client {
   listSecretsScoped(project: string | number, environment: string | number): Promise<Secret[]>;
   listDeletedSecrets(project: string | number): Promise<Secret[]>;
   getSecretScoped(name: string, project: string | number, environment: string | number): Promise<string>;
+  /** Creates a secret and returns its metadata, never the value. */
+  createSecret(
+    project: string | number,
+    environment: string | number,
+    name: string,
+    value: string,
+    opts?: CreateSecretOptions
+  ): Promise<CreatedSecret>;
   getSecretIn(project: string, environment: string, name: string): Promise<string>;
   getSecretByRef(ref: string): Promise<string>;
   listProjects(): Promise<Project[]>;

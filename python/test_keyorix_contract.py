@@ -176,6 +176,38 @@ class TestContractFullClientSurface(unittest.TestCase):
         value = self.client.get_secret_scoped(secret_name, default.id, dev_env.id)
         self.assertEqual(value, secret_value)
 
+    def test_create_secret_reads_back(self):
+        name = f"contract-create-{time.time_ns()}"
+        value = "contract-create-value-do-not-use"
+        created = self.client.create_secret(
+            "default", "development", name, value, description="created by the Python SDK contract test"
+        )
+        self.assertGreater(created.id, 0)
+        self.assertEqual((created.name, created.type), (name, "generic"))
+        self.assertEqual(self.client.get_secret_scoped(name, "default", "development"), value)
+        listed = self.client.list_secrets_scoped("default", "development")
+        self.assertIn(created.id, [s.id for s in listed])
+
+    def test_create_secret_duplicate_name_is_typed(self):
+        name = f"contract-create-dup-{time.time_ns()}"
+        value = "contract-create-value-do-not-use"
+        self.client.create_secret("default", "development", name, value)
+        with self.assertRaises(keyorix.SecretAlreadyExistsError) as ctx:
+            self.client.create_secret("default", "development", name, value)
+        self.assertEqual(ctx.exception.status_code, 409)
+        self.assertNotIn(value, str(ctx.exception))
+        self.assertNotIn(value, ctx.exception.response_body or "")
+
+    def test_create_secret_unauthenticated_is_auth_error(self):
+        default = next(p for p in self.client.list_projects() if p.name == "default")
+        env = next(e for e in self.client.list_environments(default.id) if e.name == "development")
+        for bad_token in ("not-a-valid-token", ""):
+            bad = keyorix.Client(SERVER_URL, bad_token)
+            # By ID, so the 401 comes from POST /api/v1/secrets itself and not
+            # from the project lookup a by-name call does first.
+            with self.assertRaises(keyorix.AuthError, msg=f"token {bad_token!r}"):
+                bad.create_secret(default.id, env.id, "contract-create-anon", "v")
+
     def test_deleted_secret_exposes_purge_at(self):
         projects = self.client.list_projects()
         default = next(p for p in projects if p.name == "default")

@@ -210,6 +210,57 @@ class ContractTest {
     }
 
     @Test
+    void createProjectRoundTrips() throws Exception {
+        String name = "contract-test-project-" + System.nanoTime();
+        Project p = client.createProject(name, "created by the Java SDK contract test");
+        assertEquals(name, p.getName());
+        assertEquals("created by the Java SDK contract test", p.getDescription());
+        assertTrue(p.getId() > 0, "createProject returns a nonzero id");
+        assertTrue(client.listProjects().stream().anyMatch(x -> x.getId() == p.getId()),
+                "created project appears in listProjects");
+    }
+
+    @Test
+    void createSecretReadsBack() throws Exception {
+        String name = "contract-create-" + System.nanoTime();
+        String value = "contract-create-value-do-not-use";
+        Secret created = client.createSecret("default", "development", name, value,
+                "generic", "created by the Java SDK contract test");
+        assertTrue(created.getId() > 0);
+        assertEquals(name, created.getName());
+        assertEquals("generic", created.getType());
+        assertEquals(value, client.getSecretScoped(name, "default", "development"));
+        assertTrue(client.listSecretsScoped("default", "development").stream().anyMatch(s -> s.getId() == created.getId()),
+                "created secret appears in listSecretsScoped");
+    }
+
+    @Test
+    void createSecretDuplicateNameIsTyped() throws Exception {
+        String name = "contract-create-dup-" + System.nanoTime();
+        String value = "contract-create-value-do-not-use";
+        client.createSecret("default", "development", name, value);
+        SecretAlreadyExistsException e = assertThrows(SecretAlreadyExistsException.class,
+                () -> client.createSecret("default", "development", name, value));
+        assertEquals(409, e.getStatusCode());
+        assertFalse(String.valueOf(e.getMessage()).contains(value));
+        assertFalse(String.valueOf(e.getResponseBody()).contains(value));
+    }
+
+    @Test
+    void createSecretUnauthenticatedIsAuthException() throws Exception {
+        long projectId = client.listProjects().stream().filter(p -> "default".equals(p.getName())).findFirst().get().getId();
+        long envId = client.listEnvironments(projectId).get(0).getId();
+        // By ID, so the 401 comes from POST /api/v1/secrets itself and not from
+        // the project lookup a by-name call does first.
+        for (String badToken : new String[] {"not-a-valid-token", ""}) {
+            KeyorixClient bad = Keyorix.newClient(serverUrl, badToken);
+            assertThrows(AuthException.class,
+                    () -> bad.createSecret(projectId, envId, "contract-create-anon", "v", null, null),
+                    "token '" + badToken + "'");
+        }
+    }
+
+    @Test
     void deletedSecretExposesPurgeAt() throws Exception {
         Project defaultProject = client.listProjects().stream()
                 .filter(p -> p.getName().equals("default")).findFirst().orElseThrow();

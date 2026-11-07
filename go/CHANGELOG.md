@@ -6,6 +6,7 @@ All notable changes to the Go SDK are documented here.
 
 ### Added
 
+- `CreateSecret(ctx, project, environment, name, value, opts...)` creates a secret (`POST /api/v1/secrets`) in a project+environment given by name or ID and returns its metadata. A taken name returns the new `*SecretAlreadyExistsError` (unwraps to `*APIError`). The value never appears in an error's text and is stripped from `APIError.Body` if the server echoes it.
 - `login` on an account with a second factor (MFA, the server default) now throws/raises/returns a typed MFA-required error carrying the challenge id and the available methods, instead of a generic "no token in login response". Complete it with the new `verifyMfa`/`verify_mfa`/`VerifyMFA` (TOTP or recovery code). Node, Python and Java: the new type extends the auth error `login` already threw, so existing handlers keep working.
 - `APIError.Code` carries the server's stable error code, and a value read the secret's own state refuses (server ERRMAP-1) is typed: 409 `SecretExpired` / `SecretSuspended` / `SecretMaxReadsExhausted` returns `*SecretUnavailableError` (unwraps to `*APIError`); a read outside the secret's access schedule stays `*ForbiddenError` (Code `SecretAccessOutsideSchedule`) with an accurate message. Error text is local, never the server's body. Against an older server these reads still return the generic `*APIError` (500).
 
