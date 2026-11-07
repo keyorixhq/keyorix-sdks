@@ -142,12 +142,45 @@ class JsonParser {
         if (colon == -1) return null;
         int start = json.indexOf('"', colon + 1);
         if (start == -1) return null;
-        int end = start + 1;
-        while (end < json.length()) {
-            if (json.charAt(end) == '"' && json.charAt(end - 1) != '\\') break;
-            end++;
+        return unescapeUntilQuote(json, start + 1);
+    }
+
+    /** Decodes a JSON string body starting after its opening quote, up to the closing quote. */
+    private static String unescapeUntilQuote(String json, int from) {
+        StringBuilder sb = new StringBuilder();
+        int i = from;
+        while (i < json.length()) {
+            char c = json.charAt(i);
+            if (c == '"') break;
+            if (c != '\\' || i + 1 >= json.length()) {
+                sb.append(c);
+                i++;
+                continue;
+            }
+            char n = json.charAt(i + 1);
+            i += 2;
+            switch (n) {
+                case 'b': sb.append('\b'); break;
+                case 'f': sb.append('\f'); break;
+                case 'n': sb.append('\n'); break;
+                case 'r': sb.append('\r'); break;
+                case 't': sb.append('\t'); break;
+                case 'u':
+                    if (i + 4 <= json.length()) {
+                        try {
+                            sb.append((char) Integer.parseInt(json.substring(i, i + 4), 16));
+                            i += 4;
+                            break;
+                        } catch (NumberFormatException e) {
+                            // not a valid escape: keep it literally
+                        }
+                    }
+                    sb.append("\\u");
+                    break;
+                default: sb.append(n); // '"', '\\', '/' and anything unknown
+            }
         }
-        return json.substring(start + 1, end);
+        return sb.toString();
     }
 
     /** True only when the key is present with the literal value true. */
