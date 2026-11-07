@@ -108,7 +108,7 @@ public class KeyorixClient {
      */
     public KeyorixClient(String baseUrl, String token, Duration timeout, String caCertPath) throws KeyorixException {
         validateServerUrl(baseUrl);
-        this.baseUrl = baseUrl.replaceAll("/$", "");
+        this.baseUrl = baseUrl.replaceAll("/+$", "");
         this.token = token;
         this.timeoutMs = (int) timeout.toMillis();
         this.sslSocketFactory = caCertPath == null ? null : buildSslSocketFactory(caCertPath);
