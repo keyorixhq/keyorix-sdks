@@ -90,7 +90,7 @@ public final class Keyorix {
 
             if (status != 200) {
                 throw new AuthException(what + " failed (HTTP " + status + ")", status, response,
-                        JsonParser.extractString(response, "error"));
+                        JsonParser.errorCode(response));
             }
 
             String token = JsonParser.parseToken(response);
