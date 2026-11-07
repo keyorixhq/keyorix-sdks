@@ -316,7 +316,7 @@ func New(serverURL, token string, opts ...Option) (*Client, error) {
 		return nil, err
 	}
 	c := &Client{
-		baseURL: serverURL,
+		baseURL: strings.TrimRight(serverURL, "/"),
 		token:   token,
 		httpClient: &http.Client{
 			Timeout: 30 * time.Second,
