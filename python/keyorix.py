@@ -212,7 +212,7 @@ def _error_for_response(status_code: int, body: str) -> KeyorixError:
     return KeyorixError(f"Server returned {status_code}", status_code=status_code, response_body=body, code=code)
 
 
-def _redact_value(body: str, payload: Optional[dict]) -> str:
+def _redact_payload_value(body: str, payload: Optional[dict]) -> str:
     """Remove every occurrence of the request's secret value (raw and
     JSON-escaped) from a response body, so a server that echoes request
     content in a validation message cannot put the secret into an error's
@@ -753,10 +753,10 @@ class Client:
         try:
             with urllib.request.urlopen(req, timeout=self._timeout, context=self._ssl_context) as resp:
                 if resp.status not in ok:
-                    raise _error_for_response(resp.status, _redact_value(resp.read().decode(errors="replace"), payload))
+                    raise _error_for_response(resp.status, _redact_payload_value(resp.read().decode(errors="replace"), payload))
                 return resp.read(), resp.headers
         except urllib.error.HTTPError as e:
-            body = _redact_value(e.read().decode(errors="replace"), payload)
+            body = _redact_payload_value(e.read().decode(errors="replace"), payload)
             e.close()
             raise _error_for_response(e.code, body) from e
         except urllib.error.URLError as e:
