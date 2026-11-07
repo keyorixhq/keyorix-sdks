@@ -23,6 +23,10 @@ import urllib.request
 
 import keyorix
 
+# contract.yml runs only this module; the update/delete cases live in their own
+# file and are pulled in here so CI runs them.
+from test_update_delete_contract import ContractUpdateDeleteTests  # noqa: F401
+
 SERVER_URL = os.environ.get("KEYORIX_CONTRACT_SERVER_URL", "")
 BOOTSTRAP_TOKEN = os.environ.get("KEYORIX_CONTRACT_BOOTSTRAP_TOKEN", "")
 
@@ -175,6 +179,53 @@ class TestContractFullClientSurface(unittest.TestCase):
 
         value = self.client.get_secret_scoped(secret_name, default.id, dev_env.id)
         self.assertEqual(value, secret_value)
+
+    def test_secret_with_json_escapes_round_trips_byte_for_byte(self):
+        projects = self.client.list_projects()
+        default = next(p for p in projects if p.name == "default")
+        envs = self.client.list_environments(default.id)
+        dev_env = next(e for e in envs if e.name == "development")
+
+        # newline, tab, CR, quote, backslash, a trailing backslash, a C0 control
+        # char, HTML-sensitive chars, U+2028, non-ASCII, an astral char.
+        value = 'line1\nline2 "q" back\\slash\t\r<a href="x">&</a> \x01   café \U0001F600 end\\'
+        name = f"contract-escapes-{time.time_ns()}"
+        _seed_secret(self.token, default.id, dev_env.id, name, value)
+
+        got = self.client.get_secret_scoped(name, default.id, dev_env.id)
+        self.assertEqual(got.encode("utf-8"), value.encode("utf-8"))
+
+    def test_create_secret_reads_back(self):
+        name = f"contract-create-{time.time_ns()}"
+        value = "contract-create-value-do-not-use"
+        created = self.client.create_secret(
+            "default", "development", name, value, description="created by the Python SDK contract test"
+        )
+        self.assertGreater(created.id, 0)
+        self.assertEqual((created.name, created.type), (name, "generic"))
+        self.assertEqual(self.client.get_secret_scoped(name, "default", "development"), value)
+        listed = self.client.list_secrets_scoped("default", "development")
+        self.assertIn(created.id, [s.id for s in listed])
+
+    def test_create_secret_duplicate_name_is_typed(self):
+        name = f"contract-create-dup-{time.time_ns()}"
+        value = "contract-create-value-do-not-use"
+        self.client.create_secret("default", "development", name, value)
+        with self.assertRaises(keyorix.SecretAlreadyExistsError) as ctx:
+            self.client.create_secret("default", "development", name, value)
+        self.assertEqual(ctx.exception.status_code, 409)
+        self.assertNotIn(value, str(ctx.exception))
+        self.assertNotIn(value, ctx.exception.response_body or "")
+
+    def test_create_secret_unauthenticated_is_auth_error(self):
+        default = next(p for p in self.client.list_projects() if p.name == "default")
+        env = next(e for e in self.client.list_environments(default.id) if e.name == "development")
+        for bad_token in ("not-a-valid-token", ""):
+            bad = keyorix.Client(SERVER_URL, bad_token)
+            # By ID, so the 401 comes from POST /api/v1/secrets itself and not
+            # from the project lookup a by-name call does first.
+            with self.assertRaises(keyorix.AuthError, msg=f"token {bad_token!r}"):
+                bad.create_secret(default.id, env.id, "contract-create-anon", "v")
 
     def test_deleted_secret_exposes_purge_at(self):
         projects = self.client.list_projects()

@@ -32,6 +32,11 @@ class JsonParser {
         return result;
     }
 
+    /** Parse the secret node from an update response: {"data":{"id":...,"name":...}}; null if unparseable. */
+    static Secret parseSecretResponse(String json) {
+        return parseSecret(json);
+    }
+
     /** Parse the recycle bin from: {"data":{"deleted":[...]}}; purge_at becomes {@link Secret#getPurgeAt()}. */
     static List<Secret> parseDeletedSecretList(String json, long projectId) {
         List<String> objects = extractArrayObjects(json, "deleted");
@@ -54,6 +59,37 @@ class JsonParser {
     /** Extract total_pages from a paginated list response: {"data":{...,"total_pages":N}} */
     static int parseTotalPages(String json) {
         return (int) parseLong(json, "total_pages");
+    }
+
+    /** Parse one created secret node from: {"data":{"id":..,"name":..,"type":..,"project_id":..}} */
+    static Secret parseCreatedSecret(String json) {
+        return parseSecret(json);
+    }
+
+    /** Parse one created project from: {"data":{"id":..,"name":..,"description":..}} */
+    static Project parseCreatedProject(String json) {
+        return parseProject(json);
+    }
+
+    /** Quotes s as a JSON string literal, escaping quotes, backslashes and control characters. */
+    static String quote(String s) {
+        StringBuilder sb = new StringBuilder(s.length() + 2).append('"');
+        for (int i = 0; i < s.length(); i++) {
+            char c = s.charAt(i);
+            switch (c) {
+                case '"':  sb.append("\\\""); break;
+                case '\\': sb.append("\\\\"); break;
+                case '\n': sb.append("\\n"); break;
+                case '\r': sb.append("\\r"); break;
+                case '\t': sb.append("\\t"); break;
+                case '\b': sb.append("\\b"); break;
+                case '\f': sb.append("\\f"); break;
+                default:
+                    if (c < 0x20) sb.append(String.format("\\u%04x", (int) c));
+                    else sb.append(c);
+            }
+        }
+        return sb.append('"').toString();
     }
 
     /** Parse project list from: {"data":{"projects":[...]}} */
@@ -142,44 +178,54 @@ class JsonParser {
         if (colon == -1) return null;
         int start = json.indexOf('"', colon + 1);
         if (start == -1) return null;
-        return unescapeUntilQuote(json, start + 1);
+        return decodeString(json, start + 1);
     }
 
-    /** Decodes a JSON string body starting after its opening quote, up to the closing quote. */
-    private static String unescapeUntilQuote(String json, int from) {
+    /**
+     * Decodes the body of a JSON string whose opening quote precedes {@code from},
+     * up to the closing quote: {@code \" \\ \/ \b \f \n \r \t} and {@code \}{@code uXXXX}
+     * (a surrogate pair is two consecutive escapes, which concatenate into one code point).
+     * A malformed escape throws rather than returning a silently altered value.
+     */
+    private static String decodeString(String json, int from) {
         StringBuilder sb = new StringBuilder();
         int i = from;
         while (i < json.length()) {
-            char c = json.charAt(i);
-            if (c == '"') break;
-            if (c != '\\' || i + 1 >= json.length()) {
+            char c = json.charAt(i++);
+            if (c == '"') return sb.toString();
+            if (c != '\\') {
                 sb.append(c);
-                i++;
                 continue;
             }
-            char n = json.charAt(i + 1);
-            i += 2;
-            switch (n) {
+            if (i >= json.length()) break;
+            char e = json.charAt(i++);
+            switch (e) {
+                case '"': sb.append('"'); break;
+                case '\\': sb.append('\\'); break;
+                case '/': sb.append('/'); break;
                 case 'b': sb.append('\b'); break;
                 case 'f': sb.append('\f'); break;
                 case 'n': sb.append('\n'); break;
                 case 'r': sb.append('\r'); break;
                 case 't': sb.append('\t'); break;
                 case 'u':
-                    if (i + 4 <= json.length()) {
-                        try {
-                            sb.append((char) Integer.parseInt(json.substring(i, i + 4), 16));
-                            i += 4;
-                            break;
-                        } catch (NumberFormatException e) {
-                            // not a valid escape: keep it literally
-                        }
+                    if (i + 4 > json.length()) {
+                        throw new IllegalArgumentException("truncated \\u escape in JSON string");
                     }
-                    sb.append("\\u");
+                    int cp = 0;
+                    for (int k = 0; k < 4; k++) {
+                        int d = Character.digit(json.charAt(i + k), 16);
+                        if (d < 0) throw new IllegalArgumentException("invalid \\u escape in JSON string");
+                        cp = cp * 16 + d;
+                    }
+                    sb.append((char) cp);
+                    i += 4;
                     break;
-                default: sb.append(n); // '"', '\\', '/' and anything unknown
+                default:
+                    throw new IllegalArgumentException("invalid escape \\" + e + " in JSON string");
             }
         }
+        // unterminated string: keep the old lenient behaviour of returning what was read
         return sb.toString();
     }
 

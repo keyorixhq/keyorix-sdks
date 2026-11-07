@@ -69,7 +69,7 @@ public final class Keyorix {
 
     private static String authRequest(String serverUrl, String path, String body, Duration timeout, String what) throws KeyorixException {
         KeyorixClient.validateServerUrl(serverUrl);
-        String url = serverUrl.replaceAll("/$", "") + path;
+        String url = serverUrl.replaceAll("/+$", "") + path;
 
         try {
             HttpURLConnection conn = (HttpURLConnection) new URL(url).openConnection();

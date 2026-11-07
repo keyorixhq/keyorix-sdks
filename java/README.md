@@ -89,6 +89,49 @@ String dbPassword = client.getSecretIn("my-project", "production", "db-password"
 - client.listDeletedSecrets(projectId) -> List<Secret> — the project's
   soft-deleted secrets; `secret.getPurgeAt()` is the restore deadline (RFC 3339
   UTC; empty on live secrets). Needs server v0.96.0+.
+- client.updateSecret(project, environment, name, value) -> Secret — writes
+  `value` as a **new version** of the secret `name` (the rotation call) and
+  returns its metadata — never the value. Earlier versions are kept and a read
+  returns the new value. The name is resolved as for `getSecretScoped`
+  (`SecretNotFoundException` / `AmbiguousSecretException`; an ambiguous name
+  writes nothing). `value` must not be empty. Needs `secrets.write` on the
+  secret. `client.updateSecretById(secretId, value)` is the same call when you
+  already have the ID.
+  ```java
+  client.updateSecret("my-project", "production", "db-password", newPassword);
+  ```
+  **Known limitation:** the Java SDK's value *reads* (`getSecretScoped`,
+  `getSecretIn`, `getSecretByRef`) do not yet decode JSON escapes, so a value
+  containing `"`, `\`, a newline or a tab comes back still escaped (for example
+  `line1\nline2` instead of two lines). `updateSecret` writes the value
+  correctly and the server stores it correctly; only the Java read-back is
+  affected. Go, Node and Python are not.
+  The value is never put in an exception's message, and an echo of it in the
+  server's response is replaced with `[REDACTED]` in `getResponseBody()`. Under
+  heavy concurrent writes to the same secret the server answers 409; that is a
+  plain `KeyorixException` (`getStatusCode() == 409`): retry.
+- client.deleteSecret(project, environment, name) -> String — soft-deletes the
+  secret: it stops being readable at once but can be restored until the
+  returned purge date (RFC 3339 UTC; `listDeletedSecrets` lists it with the
+  same date). The date is `""` only if the server sent none (the delete still
+  succeeded). Deleting twice throws `NotFoundException` the second time. Needs
+  `secrets.delete` on the secret. `client.deleteSecretById(secretId)` is the
+  by-ID form. The server asks for no step-up or MFA for a delete; the SDK adds
+  none. Both calls throw `ForbiddenException` (403) when the token may not
+  write/delete that secret and `NotFoundException` (404) when no live secret
+  has that ID. The purge date needs server v0.96.0+; on an older server the
+  delete works and the date is `""`.
+- client.createProject(name, description) -> Project — creates a project
+  (`POST /api/v1/projects`) and seeds its default environments; `description`
+  may be `null`. Same behaviour as `CreateProject`/`createProject`/`create_project`
+  in the Go, Node and Python SDKs.
+- client.createSecret(project, environment, name, value) -> Secret — creates a
+  secret (`POST /api/v1/secrets`) and returns its metadata, never the value. The
+  overload `createSecret(project, environment, name, value, type, description)`
+  sets the type (default `generic`) and a free-text note (`null` for none).
+  Needs `secrets.write` in the scope. A name already taken in the scope throws
+  `SecretAlreadyExistsException`. The value never appears in an exception
+  message, and any echo of it by the server is stripped from `getResponseBody()`.
 - client.health() -> boolean
 
 `project`/`environment` each have two overloads: by name (`String`, resolved to
@@ -115,6 +158,7 @@ contacting the server — use `getSecretScoped`/`listSecretsScoped` instead.
 - NotFoundException — resource not found (HTTP 404), which is what
   `getSecretIn`/`getSecretByRef` throw for a missing secret, project or environment
 - SecretNotFoundException — thrown by `getSecretScoped` when no secret in the scope has that name
+- SecretAlreadyExistsException — thrown by `createSecret` when the name is already taken in the scope (HTTP 409)
 - AmbiguousSecretException — secret name matched more than one secret in scope (`getIds()`)
 
 ## Requirements
@@ -126,8 +170,7 @@ Java 11+, zero external dependencies, Keyorix server v0.1.0+
 See [`../COMPATIBILITY.md`](../COMPATIBILITY.md) for the current
 known-compatible server versions and per-endpoint coverage — verified by
 [`../.github/workflows/contract.yml`](../.github/workflows/contract.yml)
-against a real keyorix-server, not asserted by hand. Note: this SDK does not
-yet implement `createProject` (unlike the other three languages here).
+against a real keyorix-server, not asserted by hand.
 
 ## License
 
