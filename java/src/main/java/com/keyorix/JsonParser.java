@@ -31,13 +31,12 @@ class JsonParser {
     static List<Secret> parseSecretList(String json) throws KeyorixException {
         List<Secret> result = new ArrayList<>();
         for (Map<String, Object> obj : arrayObjects(json, "secrets")) {
-            Secret s = parseSecret(obj);
-            if (s != null) result.add(s);
+            result.add(parseSecret(obj));
         }
         return result;
     }
 
-    /** Parse the secret node from an update response: {"data":{"id":...,"name":...}}; null if it has no name. */
+    /** Parse the secret node from an update response: {"data":{"id":...,"name":...}};  */
     static Secret parseSecretResponse(String json) throws KeyorixException {
         return parseSecret(scope(json));
     }
@@ -46,27 +45,21 @@ class JsonParser {
     static List<Secret> parseDeletedSecretList(String json, long projectId) throws KeyorixException {
         List<Secret> result = new ArrayList<>();
         for (Map<String, Object> obj : arrayObjects(json, "deleted")) {
-            try {
-                String name = string(obj, "name");
-                if (name == null) continue;
-                String type = string(obj, "type");
-                String purgeAt = string(obj, "purge_at");
-                result.add(new Secret(longField(obj, "id"), name, type != null ? type : "", "", projectId, "",
-                                      purgeAt != null ? purgeAt : ""));
-            } catch (NumberFormatException e) {
-                // skip an unparseable entry, as parseSecretList does
-            }
+            String type = string(obj, "type");
+            String purgeAt = string(obj, "purge_at");
+            result.add(new Secret(requiredLong(obj, "id"), requiredString(obj, "name"), type != null ? type : "", "",
+                                  projectId, "", purgeAt != null ? purgeAt : ""));
         }
         return result;
     }
 
     /** Extract total_pages from a paginated list response: {"data":{...,"total_pages":N}} */
     static int parseTotalPages(String json) throws KeyorixException {
-        try {
-            return (int) longField(scope(json), "total_pages");
-        } catch (NumberFormatException e) {
-            return 0;
+        long n = optionalLong(scope(json), "total_pages");
+        if (n < Integer.MIN_VALUE || n > Integer.MAX_VALUE) {
+            throw new KeyorixException("Unexpected JSON in server response: \"total_pages\" is out of range");
         }
+        return (int) n;
     }
 
     /** Parse one created secret node from: {"data":{"id":..,"name":..,"type":..,"project_id":..}} */
@@ -104,8 +97,7 @@ class JsonParser {
     static List<Project> parseProjectList(String json) throws KeyorixException {
         List<Project> result = new ArrayList<>();
         for (Map<String, Object> obj : arrayObjects(json, "projects")) {
-            Project p = parseProject(obj);
-            if (p != null) result.add(p);
+            result.add(parseProject(obj));
         }
         return result;
     }
@@ -114,15 +106,15 @@ class JsonParser {
     static List<Environment> parseEnvironmentList(String json) throws KeyorixException {
         List<Environment> result = new ArrayList<>();
         for (Map<String, Object> obj : arrayObjects(json, "environments")) {
-            Environment e = parseEnvironment(obj);
-            if (e != null) result.add(e);
+            result.add(parseEnvironment(obj));
         }
         return result;
     }
 
     /**
      * The string value of {@code key} in the response's data object, or null when
-     * it is absent or not a string. Malformed JSON raises {@link KeyorixException}.
+     * it is absent or null. A value of any other type, or malformed JSON, raises
+     * {@link KeyorixException}.
      */
     static String extractString(String json, String key) throws KeyorixException {
         return string(scope(json), key);
@@ -190,56 +182,72 @@ class JsonParser {
         return out;
     }
 
-    private static String string(Map<String, Object> o, String key) {
+    /** The string under {@code key}; null when absent or null. Any other type is an error. */
+    private static String string(Map<String, Object> o, String key) throws KeyorixException {
         Object v = o.get(key);
-        return v instanceof String ? (String) v : null;
+        if (v == null || v == StrictJson.NULL) return null;
+        if (v instanceof String) return (String) v;
+        throw new KeyorixException("Unexpected JSON in server response: \"" + key + "\" is not a string");
     }
 
-    /** The integer under {@code key}; 0 when absent or not a number; NumberFormatException when it is not a long. */
-    private static long longField(Map<String, Object> o, String key) {
+    /** The string under {@code key}, which must be present. */
+    private static String requiredString(Map<String, Object> o, String key) throws KeyorixException {
+        String v = string(o, key);
+        if (v == null) throw new KeyorixException("Unexpected JSON in server response: \"" + key + "\" is missing");
+        return v;
+    }
+
+    /** The integer under {@code key}; 0 when absent or null. Anything else that is not a 64-bit integer is an error. */
+    private static long optionalLong(Map<String, Object> o, String key) throws KeyorixException {
         Object v = o.get(key);
-        return v instanceof StrictJson.Num ? ((StrictJson.Num) v).asLong() : 0;
+        if (v == null || v == StrictJson.NULL) return 0;
+        return asLong(v, key);
     }
 
-    private static Secret parseSecret(Map<String, Object> obj) {
-        try {
-            long id = longField(obj, "id");
-            String name = string(obj, "name");
-            String type = string(obj, "type");
-            String env = string(obj, "environment_name");
-            long projectId = longField(obj, "project_id");
-            String createdAt = string(obj, "created_at");
-            if (name == null) return null;
-            return new Secret(id, name, type != null ? type : "", env != null ? env : "",
-                              projectId, createdAt != null ? createdAt : "");
-        } catch (NumberFormatException e) {
-            return null;
+    /** The integer under {@code key}, which must be present and a 64-bit integer. */
+    private static long requiredLong(Map<String, Object> o, String key) throws KeyorixException {
+        Object v = o.get(key);
+        if (v == null || v == StrictJson.NULL) {
+            throw new KeyorixException("Unexpected JSON in server response: \"" + key + "\" is missing");
         }
+        return asLong(v, key);
     }
 
-    private static Project parseProject(Map<String, Object> obj) {
-        try {
-            long id = longField(obj, "id");
-            String name = string(obj, "name");
-            String description = string(obj, "description");
-            String createdAt = string(obj, "created_at");
-            if (name == null) return null;
-            return new Project(id, name, description != null ? description : "",
-                                createdAt != null ? createdAt : "");
-        } catch (NumberFormatException e) {
-            return null;
+    private static long asLong(Object v, String key) throws KeyorixException {
+        if (v instanceof StrictJson.Num) {
+            try {
+                return ((StrictJson.Num) v).asLong();
+            } catch (NumberFormatException e) {
+                // fall through
+            }
         }
+        throw new KeyorixException("Unexpected JSON in server response: \"" + key + "\" is not a 64-bit integer");
     }
 
-    private static Environment parseEnvironment(Map<String, Object> obj) {
-        try {
-            long id = longField(obj, "id");
-            String name = string(obj, "name");
-            long projectId = longField(obj, "project_id");
-            if (name == null) return null;
-            return new Environment(id, projectId, name);
-        } catch (NumberFormatException e) {
-            return null;
-        }
+    private static Secret parseSecret(Map<String, Object> obj) throws KeyorixException {
+        long id = requiredLong(obj, "id");
+        String name = requiredString(obj, "name");
+        String type = string(obj, "type");
+        String env = string(obj, "environment_name");
+        long projectId = optionalLong(obj, "project_id");
+        String createdAt = string(obj, "created_at");
+        return new Secret(id, name, type != null ? type : "", env != null ? env : "",
+                          projectId, createdAt != null ? createdAt : "");
+    }
+
+    private static Project parseProject(Map<String, Object> obj) throws KeyorixException {
+        long id = requiredLong(obj, "id");
+        String name = requiredString(obj, "name");
+        String description = string(obj, "description");
+        String createdAt = string(obj, "created_at");
+        return new Project(id, name, description != null ? description : "",
+                            createdAt != null ? createdAt : "");
+    }
+
+    private static Environment parseEnvironment(Map<String, Object> obj) throws KeyorixException {
+        long id = requiredLong(obj, "id");
+        String name = requiredString(obj, "name");
+        long projectId = optionalLong(obj, "project_id");
+        return new Environment(id, projectId, name);
     }
 }
