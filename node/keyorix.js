@@ -233,6 +233,21 @@ function isLoopbackHost(hostname) {
   return host === 'localhost' || host === '::1' || /^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(host);
 }
 
+// WHATWG URL parsing rewrites shorthand IPv4 forms (127.1, 2130706433,
+// 0x7f.0.0.1) to 127.0.0.1, so the loopback check also looks at the host as
+// written: it must be localhost, a canonical dotted-quad 127.x.y.z address or
+// [::1], like the Go and Java SDKs.
+function hasLiteralLoopbackHost(serverUrl) {
+  const m = /^http:\/\/([^/?#:[]+|\[[^\]]*\])/i.exec(serverUrl.trim());
+  if (!m) return false;
+  const host = m[1].toLowerCase();
+  return (
+    host === 'localhost' ||
+    host === '[::1]' ||
+    /^127\.(?:0|[1-9]\d{0,2})\.(?:0|[1-9]\d{0,2})\.(?:0|[1-9]\d{0,2})$/.test(host)
+  );
+}
+
 // Rejects any scheme but https; allows http only for localhost/loopback. A
 // bearer token and every secret value would otherwise be sent/received in
 // cleartext, and an unrestricted scheme (e.g. file://) would let a
@@ -246,7 +261,7 @@ function validateServerUrl(serverUrl) {
     throw new KeyorixError(`Invalid server URL '${serverUrl}': ${err.message}`);
   }
   if (u.protocol === 'https:') return;
-  if (u.protocol === 'http:' && isLoopbackHost(u.hostname)) return;
+  if (u.protocol === 'http:' && isLoopbackHost(u.hostname) && hasLiteralLoopbackHost(serverUrl)) return;
   throw new KeyorixError(
     `Server URL '${serverUrl}' must use https:// (http:// is only allowed for localhost/loopback)`
   );

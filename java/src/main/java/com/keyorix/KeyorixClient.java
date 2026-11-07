@@ -109,6 +109,7 @@ public class KeyorixClient {
      */
     public KeyorixClient(String baseUrl, String token, Duration timeout, String caCertPath) throws KeyorixException {
         validateServerUrl(baseUrl);
+        validateToken(token);
         this.baseUrl = baseUrl.replaceAll("/+$", "");
         this.token = token;
         this.timeoutMs = (int) timeout.toMillis();
@@ -154,6 +155,22 @@ public class KeyorixClient {
         if ("http".equals(scheme) && isLoopbackHost(uri.getHost())) return;
         throw new KeyorixException(
             "Server URL '" + serverUrl + "' must use https:// (http:// is only allowed for localhost/loopback)");
+    }
+
+    /**
+     * Rejects a token the HTTP layer cannot carry: control characters (CR, LF,
+     * NUL, tab, ...) such as a trailing newline, or non-ASCII characters. The
+     * message never contains the token.
+     */
+    static void validateToken(String token) throws KeyorixException {
+        if (token == null) return;
+        for (int i = 0; i < token.length(); i++) {
+            char c = token.charAt(i);
+            if (c < 0x20 || c >= 0x7F) {
+                throw new KeyorixException(
+                    "Token contains a control or non-ASCII character (check for a trailing newline)");
+            }
+        }
     }
 
     private static boolean isLoopbackHost(String host) {
@@ -775,8 +792,17 @@ public class KeyorixClient {
         conn.setRequestMethod(method);
         conn.setConnectTimeout(timeoutMs);
         conn.setReadTimeout(timeoutMs);
-        if (auth) conn.setRequestProperty("Authorization", "Bearer " + token);
+        if (auth) setAuthorization(conn, token);
         return conn;
+    }
+
+    static void setAuthorization(HttpURLConnection conn, String token) throws IOException {
+        try {
+            conn.setRequestProperty("Authorization", "Bearer " + token);
+        } catch (IllegalArgumentException e) {
+            // The JDK's message contains the raw header value; do not propagate it.
+            throw new IOException("Invalid Authorization header value");
+        }
     }
 
     private static String readStream(InputStream is) throws IOException {

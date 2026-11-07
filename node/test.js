@@ -57,6 +57,12 @@ async function runTests() {
     try { new Client('http://example.com:8080', 'tok'); return false; }
     catch (e) { return e instanceof KeyorixError; }
   })(), 'Client rejects non-loopback http://');
+  for (const bad of ['http://127.1', 'http://127.1:8080', 'http://2130706433', 'http://0x7f.0.0.1', 'http://127.0.0.01', 'http://localhost@evil.com']) {
+    assert((() => {
+      try { new Client(bad, 'tok'); return false; }
+      catch (e) { return e instanceof KeyorixError; }
+    })(), `Client rejects shorthand/odd loopback ${bad}`);
+  }
   assert((() => {
     try { new Client('file:///etc/passwd', 'tok'); return false; }
     catch (e) { return e instanceof KeyorixError; }

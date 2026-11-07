@@ -14,6 +14,12 @@ All notable changes to the Node.js SDK are documented here.
   (`GET /api/v1/projects/{id}/secrets/deleted`): the restore deadline of a
   soft-deleted secret. Needs server v0.96.0+.
 
+### Changed
+
+- `http://` server URLs are accepted only for `localhost`, a canonical
+  dotted-quad `127.x.y.z` address or `[::1]`; shorthand loopback forms such as
+  `127.1` or `2130706433` are now rejected, as in the Go and Java SDKs.
+
 ## v0.3.0 (unreleased)
 
 ### Documentation and tests

@@ -24,6 +24,13 @@ All notable changes to the Java SDK are documented here.
   (`GET /api/v1/projects/{id}/secrets/deleted`): the restore deadline of a
   soft-deleted secret. Needs server v0.96.0+.
 
+### Changed
+
+- `KeyorixClient` rejects a token containing control or non-ASCII characters
+  (for example a trailing newline) at construction with a `KeyorixException`
+  whose message does not include the token. An invalid header value raised
+  while a request is built is reported without the underlying JDK message.
+
 ## v0.3.0 (unreleased)
 
 ### Documentation and tests

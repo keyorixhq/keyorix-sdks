@@ -14,6 +14,23 @@ All notable changes to the Python SDK are documented here.
   (`GET /api/v1/projects/{id}/secrets/deleted`): the restore deadline of a
   soft-deleted secret. Needs server v0.96.0+.
 
+### Changed
+
+- The client no longer follows HTTP redirects: a 3xx response (including from
+  `login`, `verify_mfa` and `health`) is raised as `KeyorixError` with its
+  `status_code`, so the `Authorization` header is never re-sent to another
+  address.
+- `server_url` validation is stricter. URLs with embedded credentials,
+  backslashes, whitespace or control characters, an empty or
+  invalid port, an IPv6 zone id, or a non-DNS host are rejected, and
+  `http://` is accepted only for `localhost`, a dotted-quad `127.x.y.z`
+  address or `[::1]` (shorthand forms such as `127.1` are rejected). Error
+  messages no longer repeat the URL.
+- `Client` rejects a token containing control or non-ASCII characters (for
+  example a trailing newline) at construction, with a message that does not
+  include the token. A low-level error raised while sending a request is
+  re-raised as `KeyorixError` without the underlying message.
+
 ## v0.3.0 (unreleased)
 
 ### Documentation and tests
