@@ -133,6 +133,20 @@ the server reports.
 the `Client` for its lifetime) or `keyorix.ProjectByID(id)` / `keyorix.EnvironmentByID(id)`
 (no resolution round trip).
 
+### `client.CreateSecret(ctx, project ProjectRef, environment EnvironmentRef, name, value string, opts ...SecretOption) (*Secret, error)`
+Creates a secret (`POST /api/v1/secrets`) and returns its metadata, never the
+value. `project`/`environment` are given by name or ID exactly as for
+`ListSecretsScoped`. The type defaults to `generic`; override it and add a
+note with `keyorix.WithSecretType("password")` / `keyorix.WithSecretDescription("...")`.
+Needs `secrets.write` in the scope. A name already taken in the scope returns
+`*SecretAlreadyExistsError`. The value never appears in an error's text, and any
+echo of it by the server is stripped from `APIError.Body`.
+
+```go
+secret, err := client.CreateSecret(ctx, keyorix.ProjectByName("my-project"),
+    keyorix.EnvironmentByName("production"), "db-password", dbPassword)
+```
+
 ### `client.Health(ctx) error`
 Checks if the server is reachable. Returns nil if healthy.
 
@@ -174,6 +188,7 @@ Test with `errors.As`:
   `GetSecretIn`/`GetSecretByRef` return for a missing secret, project or environment
 - `*keyorix.SecretNotFoundError` — returned by `GetSecretScoped` when no secret in the scope has that name
 - `*keyorix.AmbiguousSecretError` — the name matched more than one secret in scope
+- `*keyorix.SecretAlreadyExistsError` — returned by `CreateSecret` when the name is already taken in the scope (HTTP 409)
 - `*keyorix.APIError` — any other non-2xx response (the 401/403/404 types above unwrap to it)
 
 ## Requirements

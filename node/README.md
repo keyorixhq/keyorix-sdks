@@ -78,6 +78,12 @@ Zero external dependencies. Uses Node.js built-in http/https modules.
 - client.listDeletedSecrets(project) -> Promise<Secret[]> — the project's
   soft-deleted secrets; `purgeAt` is the restore deadline (RFC 3339 UTC; absent
   on live secrets). Needs server v0.96.0+.
+- client.createSecret(project, environment, name, value, { type, description }?) ->
+  Promise<{ id, name, type, projectId, environmentId }> — creates a secret
+  (`POST /api/v1/secrets`) and returns its metadata, never the value. `type`
+  defaults to `generic`. Needs `secrets.write` in the scope. A name already taken
+  in the scope throws `SecretAlreadyExistsError`. The value never appears in an
+  error message, and any echo of it by the server is stripped from `responseBody`.
 - client.health() -> Promise<boolean>
 
 `project`/`environment` each accept either a name (`string`, resolved to an ID
@@ -104,6 +110,7 @@ server — use `getSecretScoped`/`listSecretsScoped` instead.
 - NotFoundError — resource not found (HTTP 404), which is what
   `getSecretIn`/`getSecretByRef` throw for a missing secret, project or environment
 - SecretNotFoundError — thrown by `getSecretScoped` when no secret in the scope has that name
+- SecretAlreadyExistsError — thrown by `createSecret` when the name is already taken in the scope (HTTP 409)
 - AmbiguousSecretError — secret name matched more than one secret in scope (`.ids`)
 
 ## Requirements

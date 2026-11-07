@@ -12,6 +12,7 @@ const {
   NotFoundError,
   SecretUnavailableError,
   SecretNotFoundError,
+  SecretAlreadyExistsError,
   AmbiguousSecretError,
 } = require('./keyorix');
 
@@ -185,6 +186,65 @@ async function runTests() {
       }
     } finally {
       refusalServer.close();
+    }
+  }
+
+  // createSecret: scoped POST /api/v1/secrets. Typed errors, and the value never
+  // reaches an error message or responseBody (even when the server echoes it).
+  {
+    const secretValue = 'pa"ss\nword-s3cr3t-must-not-leak';
+    let lastBody;
+    let mode = 'ok';
+    const createServer = http.createServer((req, res) => {
+      let raw = '';
+      req.on('data', (d) => (raw += d));
+      req.on('end', () => {
+        res.writeHead(mode === 'ok' ? 201 : mode === 'dup' ? 409 : mode === 'unauth' ? 401 : 400, { 'Content-Type': 'application/json' });
+        if (mode === 'ok') {
+          lastBody = JSON.parse(raw);
+          res.end(JSON.stringify({ data: { id: 7, name: lastBody.name, type: lastBody.type, project_id: lastBody.project_id, environment_id: lastBody.environment_id } }));
+        } else if (mode === 'dup') {
+          res.end(JSON.stringify({ success: false, error: 'ConflictError', message: 'Secret with this name already exists', code: 409 }));
+        } else {
+          res.end(JSON.stringify({ error: 'ValidationError', message: `echo: ${secretValue} / ${JSON.stringify(secretValue)}` }));
+        }
+      });
+    });
+    await new Promise((resolve) => createServer.listen(0, resolve));
+    try {
+      const c = new Client(`http://localhost:${createServer.address().port}`, 'tok');
+      const created = await c.createSecret(3, 4, 'db-password', secretValue, { description: 'note' });
+      assert(created.id === 7 && created.name === 'db-password' && created.projectId === 3 && created.environmentId === 4, 'createSecret returns the created node (by IDs)');
+      assert(lastBody.value === secretValue && lastBody.type === 'generic' && lastBody.description === 'note', 'createSecret sends value, default type and description');
+
+      mode = 'dup';
+      try {
+        await c.createSecret(3, 4, 'db-password', secretValue);
+        assert(false, 'createSecret should have thrown on a duplicate name');
+      } catch (e) {
+        assert(e instanceof SecretAlreadyExistsError && e instanceof KeyorixError, 'duplicate name (409) is SecretAlreadyExistsError');
+        assert(e.statusCode === 409 && e.errorCode === 'ConflictError', 'SecretAlreadyExistsError carries status and code');
+      }
+
+      mode = 'unauth';
+      try {
+        await c.createSecret(3, 4, 'n', secretValue);
+        assert(false, 'createSecret should have thrown on 401');
+      } catch (e) {
+        assert(e instanceof AuthError, '401 on createSecret is AuthError');
+      }
+
+      mode = 'bad';
+      try {
+        await c.createSecret(3, 4, 'n', secretValue);
+        assert(false, 'createSecret should have thrown on 400');
+      } catch (e) {
+        assert(e instanceof KeyorixError, '400 on createSecret is KeyorixError');
+        assert(!e.message.includes(secretValue) && !String(e.responseBody).includes(secretValue), 'value is absent from the error message and responseBody');
+        assert(!String(e.responseBody).includes(JSON.stringify(secretValue).slice(1, -1)), 'JSON-escaped value is absent from responseBody too');
+      }
+    } finally {
+      createServer.close();
     }
   }
 
