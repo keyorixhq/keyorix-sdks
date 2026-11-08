@@ -93,6 +93,7 @@ public final class Keyorix {
                         JsonParser.errorCode(response));
             }
 
+            // A 200 body that is malformed or reports success=false raises a plain KeyorixException here.
             String token = JsonParser.parseToken(response);
             if (token != null && !token.isEmpty()) {
                 return token;

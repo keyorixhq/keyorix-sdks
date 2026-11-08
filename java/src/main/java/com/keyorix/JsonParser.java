@@ -21,7 +21,8 @@ class JsonParser {
         return extractString(json, "token");
     }
 
-    /** Extract secret value from secret response: {"data":{"value":"..."}}; a missing or non-string value is an error. */
+    /** Extract secret value from secret response: {"data":{"value":"..."}}; a missing or non-string value is an error.
+     * An empty string value is valid and is returned as {@code ""}. */
     static String parseSecretValue(String json) throws KeyorixException {
         return requiredString(scope(json), "value");
     }
@@ -157,7 +158,8 @@ class JsonParser {
     /**
      * The response's {@code data} object, where every field the SDK reads lives.
      * A body that reports {@code "success"} as anything but true, or that has no
-     * {@code data} object, is an error.
+     * {@code data} object, is an error. This is a plain {@link KeyorixException}, also for
+     * a 200 login response; it is deliberately not an {@link AuthException}.
      */
     private static Map<String, Object> scope(String json) throws KeyorixException {
         Map<String, Object> root = root(json);
@@ -171,7 +173,11 @@ class JsonParser {
         return m;
     }
 
-    /** The objects in the array under {@code key} of the data object; missing or null means none. */
+    /**
+     * The objects in the array under {@code key} of the data object. A missing or null
+     * collection is deliberately an empty list (a server may encode an empty collection as
+     * null); any other non-array value, or a non-object item, is an error.
+     */
     private static List<Map<String, Object>> arrayObjects(String json, String key) throws KeyorixException {
         Object arr = scope(json).get(key);
         List<Map<String, Object>> out = new ArrayList<>();
@@ -201,7 +207,7 @@ class JsonParser {
         return v;
     }
 
-    /** The integer under {@code key}; 0 when absent or null. Anything else that is not a 64-bit integer is an error. */
+    /** The integer under {@code key}; 0 when absent or null (an absent optional field such as project_id is deliberately 0). Anything else that is not a 64-bit integer is an error. */
     private static long optionalLong(Map<String, Object> o, String key) throws KeyorixException {
         Object v = o.get(key);
         if (v == null || v == StrictJson.NULL) return 0;
