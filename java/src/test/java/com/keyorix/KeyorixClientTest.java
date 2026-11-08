@@ -29,32 +29,32 @@ class KeyorixClientTest {
     }
 
     @Test
-    void testClientRejectsNonLoopbackHttp() {
+    void testClientRejectsNonLoopbackHttp() throws Exception {
         assertThrows(KeyorixException.class, () -> new KeyorixClient("http://example.com:8080", "test-token"));
     }
 
     @Test
-    void testClientRejectsNonHttpScheme() {
+    void testClientRejectsNonHttpScheme() throws Exception {
         assertThrows(KeyorixException.class, () -> new KeyorixClient("file:///etc/passwd", "test-token"));
         assertThrows(KeyorixException.class, () -> new KeyorixClient("ftp://example.com", "test-token"));
     }
 
     @Test
-    void testSecretNotFoundException_isKeyorixException() {
+    void testSecretNotFoundException_isKeyorixException() throws Exception {
         SecretNotFoundException ex = new SecretNotFoundException("not found");
         assertInstanceOf(KeyorixException.class, ex);
         assertEquals("not found", ex.getMessage());
     }
 
     @Test
-    void testAuthException_isKeyorixException() {
+    void testAuthException_isKeyorixException() throws Exception {
         AuthException ex = new AuthException("unauthorized");
         assertInstanceOf(KeyorixException.class, ex);
         assertEquals("unauthorized", ex.getMessage());
     }
 
     @Test
-    void testKeyorixException_messageOmitsBody() {
+    void testKeyorixException_messageOmitsBody() throws Exception {
         KeyorixException ex = new KeyorixException("Server returned 500", 500, "internal stack trace here");
         assertFalse(ex.getMessage().contains("internal stack trace here"));
         assertEquals(500, ex.getStatusCode());
@@ -254,7 +254,7 @@ class KeyorixClientTest {
     }
 
     @Test
-    void testSecretModel() {
+    void testSecretModel() throws Exception {
         Secret s = new Secret(1L, "db-password", "password", "production", 1L, "2026-01-01");
         assertEquals(1L, s.getId());
         assertEquals("db-password", s.getName());
@@ -265,19 +265,19 @@ class KeyorixClientTest {
     }
 
     @Test
-    void testJsonParser_parseToken() {
+    void testJsonParser_parseToken() throws Exception {
         String json = "{\"data\":{\"token\":\"abc123\",\"user_id\":1}}";
         assertEquals("abc123", JsonParser.extractString(json, "token"));
     }
 
     @Test
-    void testJsonParser_parseSecretValue() {
+    void testJsonParser_parseSecretValue() throws Exception {
         String json = "{\"data\":{\"ID\":7,\"value\":\"supersecret\"}}";
         assertEquals("supersecret", JsonParser.parseSecretValue(json));
     }
 
     @Test
-    void testJsonParser_parseSecretList() {
+    void testJsonParser_parseSecretList() throws Exception {
         String json = "{\"data\":{\"secrets\":[" +
             "{\"id\":1,\"name\":\"db-password\",\"type\":\"password\",\"environment_name\":\"production\",\"project_id\":1,\"created_at\":\"2026-01-01\"}," +
             "{\"id\":2,\"name\":\"api-key\",\"type\":\"generic\",\"environment_name\":\"staging\",\"project_id\":2,\"created_at\":\"2026-01-02\"}" +
@@ -293,7 +293,7 @@ class KeyorixClientTest {
     }
 
     @Test
-    void testJsonParser_emptySecretList() {
+    void testJsonParser_emptySecretList() throws Exception {
         String json = "{\"data\":{\"secrets\":[]}}";
         java.util.List<Secret> secrets = JsonParser.parseSecretList(json);
         assertTrue(secrets.isEmpty());

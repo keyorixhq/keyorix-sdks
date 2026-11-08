@@ -745,7 +745,7 @@ public class KeyorixClient {
      * which method failed.
      */
     private static KeyorixException mapError(int status, String body) {
-        String code = body == null ? null : JsonParser.extractString(body, "error");
+        String code = JsonParser.errorCode(body);
         switch (status) {
             case 401:
                 return new AuthException("Unauthorized — check your token", status, body, code);

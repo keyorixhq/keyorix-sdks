@@ -14,22 +14,22 @@ import static org.junit.jupiter.api.Assertions.*;
 class JsonEscapeTest {
 
     @Test
-    void extractStringUnescapesQuotesAndBackslashes() {
+    void extractStringUnescapesQuotesAndBackslashes() throws Exception {
         String json = "{\"data\":{\"name\":\"quote\\\"and\\\\back\"}}";
         assertEquals("quote\"and\\back", JsonParser.extractString(json, "name"));
     }
 
     @Test
-    void extractStringStopsAtQuoteAfterEscapedBackslash() {
+    void extractStringStopsAtQuoteAfterEscapedBackslash() throws Exception {
         // value is a single backslash; the quote after the escaped backslash ends the string
-        String json = "{\"a\":\"\\\\\",\"b\":\"next\"}";
+        String json = "{\"data\":{\"a\":\"\\\\\",\"b\":\"next\"}}";
         assertEquals("\\", JsonParser.extractString(json, "a"));
         assertEquals("next", JsonParser.extractString(json, "b"));
     }
 
     @Test
-    void extractStringDecodesControlAndUnicodeEscapes() {
-        String json = "{\"v\":\"l1\\nl2\\ttab\\u00e9\\/x\"}";
+    void extractStringDecodesControlAndUnicodeEscapes() throws Exception {
+        String json = "{\"data\":{\"v\":\"l1\\nl2\\ttab\\u00e9\\/x\"}}";
         assertEquals("l1\nl2\ttabé/x", JsonParser.extractString(json, "v"));
     }
 

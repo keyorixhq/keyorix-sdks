@@ -112,7 +112,7 @@ class ContractTest {
 
     /** Mints a personal access token for the caller identified by adminToken, via raw
      * HTTP (PAT issuance is not part of this SDK's public surface). */
-    private static String createPAT(String adminToken, String name) throws IOException {
+    private static String createPAT(String adminToken, String name) throws Exception {
         StringBuilder resp = new StringBuilder();
         int status = postJson(serverUrl + "/api/v1/auth/tokens", "{\"name\":\"" + name + "\"}", adminToken, resp);
         if (status >= 300) {
@@ -128,7 +128,7 @@ class ContractTest {
      * no roles, so this token authenticates but is not authorized for anything yet --
      * exactly the shape needed to prove authentication succeeds independently of
      * authorization. */
-    private static String createMachineToken(String adminToken, long projectId) throws IOException {
+    private static String createMachineToken(String adminToken, long projectId) throws Exception {
         StringBuilder idResp = new StringBuilder();
         String idBody = "{\"name\":\"contract-test-machine-" + System.nanoTime() + "\",\"identity_type\":\"service\"}";
         int idStatus = postJson(serverUrl + "/api/v1/projects/" + projectId + "/machine-identities", idBody, adminToken, idResp);

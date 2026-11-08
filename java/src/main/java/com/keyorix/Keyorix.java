@@ -90,9 +90,10 @@ public final class Keyorix {
 
             if (status != 200) {
                 throw new AuthException(what + " failed (HTTP " + status + ")", status, response,
-                        JsonParser.extractString(response, "error"));
+                        JsonParser.errorCode(response));
             }
 
+            // A 200 body that is malformed or reports success=false raises a plain KeyorixException here.
             String token = JsonParser.parseToken(response);
             if (token != null && !token.isEmpty()) {
                 return token;
