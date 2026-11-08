@@ -9,22 +9,21 @@ import java.util.Map;
  *
  * <p>A response body is parsed in full with {@link StrictJson}; malformed or
  * truncated input raises {@link KeyorixException} instead of yielding a
- * partial result. Fields are read from the response's {@code data} object (or
- * from the top-level object when the body has no {@code data} object), never
+ * partial result. Fields are read from the response's {@code data} object, never
  * from deeper levels, and when a key is repeated the last occurrence wins.
  */
 class JsonParser {
 
     private JsonParser() {}
 
-    /** Extract token from login response: {"data":{"token":"..."}} */
+    /** Extract token from login response: {"data":{"token":"..."}}; null if the response carries none (for example an MFA challenge). */
     static String parseToken(String json) throws KeyorixException {
         return extractString(json, "token");
     }
 
-    /** Extract secret value from secret response: {"data":{"value":"..."}} */
+    /** Extract secret value from secret response: {"data":{"value":"..."}}; a missing or non-string value is an error. */
     static String parseSecretValue(String json) throws KeyorixException {
-        return extractString(json, "value");
+        return requiredString(scope(json), "value");
     }
 
     /** Parse secret list from: {"data":{"secrets":[...]}} */
@@ -155,16 +154,21 @@ class JsonParser {
         return m;
     }
 
-    /** The object the response's fields live in: its {@code data} object, else the top-level object. */
+    /**
+     * The response's {@code data} object, where every field the SDK reads lives.
+     * A body that reports {@code "success"} as anything but true, or that has no
+     * {@code data} object, is an error.
+     */
     private static Map<String, Object> scope(String json) throws KeyorixException {
         Map<String, Object> root = root(json);
-        Object data = root.get("data");
-        if (data instanceof Map) {
-            @SuppressWarnings("unchecked")
-            Map<String, Object> m = (Map<String, Object>) data;
-            return m;
+        if (root.containsKey("success") && !Boolean.TRUE.equals(root.get("success"))) {
+            throw new KeyorixException("Server response does not report success");
         }
-        return root;
+        Object data = root.get("data");
+        if (!(data instanceof Map)) throw new KeyorixException("Unexpected JSON in server response: no \"data\" object");
+        @SuppressWarnings("unchecked")
+        Map<String, Object> m = (Map<String, Object>) data;
+        return m;
     }
 
     /** The objects in the array under {@code key} of the data object; missing or null means none. */

@@ -11,7 +11,19 @@ All notable changes to the Java SDK are documented here.
   so `line1\nline2 "q"` arrived as `line1\\nline2 \\"q\\"`, and a value ending
   in a backslash was cut at the wrong quote. It now decodes `\" \\ \/ \b \f \n
   \r \t` and `\uXXXX` (surrogate pairs included); a malformed escape throws
-  `IllegalArgumentException` instead of returning an altered value.
+  `KeyorixException` instead of returning an altered value.
+- Responses are now parsed in full as strict JSON. A truncated or malformed
+  body raises `KeyorixException` instead of returning a partial or empty
+  list/value; a key is read only from the response's `data` object, not from a
+  nested object or from inside a string value; and when a key is repeated the
+  last one wins, as in the Go, Node and Python SDKs.
+- An id that is not a 64-bit integer (a string, a fraction, an overflow, or
+  missing) now raises `KeyorixException`. Before, it was read as 0 or made the
+  list entry disappear. An item without a string name is an error too, and
+  `total_pages` must be an integer.
+- A 200 response that reports `"success": false`, has no `data` object, or has
+  no string `value` / a non-string `token` now raises `KeyorixException`
+  instead of returning `null`.
 
 ### Added
 

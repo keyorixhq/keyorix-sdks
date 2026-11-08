@@ -22,14 +22,14 @@ class JsonEscapeTest {
     @Test
     void extractStringStopsAtQuoteAfterEscapedBackslash() throws Exception {
         // value is a single backslash; the quote after the escaped backslash ends the string
-        String json = "{\"a\":\"\\\\\",\"b\":\"next\"}";
+        String json = "{\"data\":{\"a\":\"\\\\\",\"b\":\"next\"}}";
         assertEquals("\\", JsonParser.extractString(json, "a"));
         assertEquals("next", JsonParser.extractString(json, "b"));
     }
 
     @Test
     void extractStringDecodesControlAndUnicodeEscapes() throws Exception {
-        String json = "{\"v\":\"l1\\nl2\\ttab\\u00e9\\/x\"}";
+        String json = "{\"data\":{\"v\":\"l1\\nl2\\ttab\\u00e9\\/x\"}}";
         assertEquals("l1\nl2\ttabé/x", JsonParser.extractString(json, "v"));
     }
 
