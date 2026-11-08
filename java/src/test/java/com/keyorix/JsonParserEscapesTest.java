@@ -69,4 +69,19 @@ class JsonParserEscapesTest {
         assertThrows(KeyorixException.class, () -> value("bad\\u12"));
         assertThrows(KeyorixException.class, () -> value("bad\\uZZZZ"));
     }
+
+    @Test
+    void unpairedSurrogateEscapesAreRejected() {
+        assertThrows(KeyorixException.class, () -> value("\\ud800"));          // high alone
+        assertThrows(KeyorixException.class, () -> value("\\udc00"));          // low alone
+        assertThrows(KeyorixException.class, () -> value("\\ud83dx"));         // high followed by a plain char
+        assertThrows(KeyorixException.class, () -> value("\\ud83d\\u0041")); // high followed by a non-low escape
+        assertThrows(KeyorixException.class, () -> value("\\ude00\\ud83d")); // low followed by high
+        assertThrows(KeyorixException.class, () -> value("\\ud83d\\ud83d")); // high followed by high
+    }
+
+    @Test
+    void aValidSurrogatePairIsStillAccepted() throws Exception {
+        assertEquals("a\ud83d\ude00b", value("a\\ud83d\\ude00b"));
+    }
 }

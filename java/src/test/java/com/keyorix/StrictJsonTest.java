@@ -20,7 +20,7 @@ class StrictJsonTest {
     @ParameterizedTest
     @ValueSource(strings = {
         "{}", "[]", "[[]]", "[1,2,3]", "{\"a\":null}", "\"x\"", "0", "-0", "1E2", "1.5e-3", "true", "false", "null",
-        " \t\r\n{ \"a\" : [ 1 , 2 ] } \n", "[\"\\u0000\"]", "[\"\\uD800\"]", "[\"\\ud83d\\ude00\"]", "\"\u00e9\"",
+        " \t\r\n{ \"a\" : [ 1 , 2 ] } \n", "[\"\\u0000\"]", "[\"\\ud83d\\ude00\"]", "\"\u00e9\"",
         "{\"a\":1,\"a\":2}", "[123e65]", "[-1]", "[0.0]"
     })
     void acceptsWellFormedValues(String json) {
@@ -34,10 +34,22 @@ class StrictJsonTest {
         "{'a':1}", "{a:1}", "{\"a\" 1}", "{\"a\":1 \"b\":2}", "{,}", "[,]", "[1,]", "{\"a\":1,}", "[1 2]",
         "01", "-", "+1", "1.", ".5", "1e", "1e+", "0x10", "-01", "NaN", "Infinity", "-Infinity", "[1.e1]",
         "\"\\q\"", "\"\\x41\"", "\"\\u00G0\"", "\"\\u\uff10\uff10\uff10\uff10\"", "\"\\U0041\"", "\"a\nb\"", "\"a\tb\"", "\"a\u0000b\"",
-        "\ufeff{}", "\u00a0{}", "[\"a\"\u0000]", "{\"a\":\"b\"\u0000}", "/* c */{}", "{}//", "[-]"
+        "\ufeff{}", "\u00a0{}", "[\"a\"\u0000]", "{\"a\":\"b\"\u0000}", "/* c */{}", "{}//", "[-]",
+        "\"\\ud800\"", "\"\\udbff\"", "\"\\udc00\"", "\"\\udfff\"", "\"\\ud800x\"", "\"\\ud800\\u0041\"",
+        "\"\\ud800\\ud800\"", "\"\\udc00\\ud800\"", "\"\\ud83d\\n\"", "\"\\ud83d", "{\"\\ud800\":1}",
+        "\"\ud800\"", "\"\udc00\"", "\"\ud83dx\""
     })
     void rejectsMalformedValues(String json) {
         assertThrows(KeyorixException.class, () -> StrictJson.parse(json));
+    }
+
+    @Test
+    void validSurrogatePairsAreAccepted() throws Exception {
+        assertEquals("\ud83d\ude00", StrictJson.parse("\"\\ud83d\\ude00\""));
+        assertEquals("\ud83d\ude00", StrictJson.parse("\"\\uD83D\\uDE00\""));
+        assertEquals("a\ud800\udc00b", StrictJson.parse("\"a\\ud800\\udc00b\""));
+        assertEquals("\udbff\udfff", StrictJson.parse("\"\\udbff\\udfff\""));
+        assertEquals("\ud83d\ude00", StrictJson.parse("\"\ud83d\ude00\""));
     }
 
     @Test

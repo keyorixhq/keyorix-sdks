@@ -12,7 +12,7 @@ import java.util.Map;
  * {@code String}, {@code Boolean}, {@link Num} (numbers, kept as their source text)
  * and {@link #NULL}. Anything that is not exactly one well-formed JSON value
  * (truncated input, trailing data, bad escapes, raw control characters in a
- * string, excessive nesting) is rejected with a {@link KeyorixException}; a
+ * string, unpaired surrogates, excessive nesting) is rejected with a {@link KeyorixException}; a
  * partial result is never returned. If an object repeats a key, the last
  * occurrence wins.
  */
@@ -147,6 +147,12 @@ final class StrictJson {
             if (c == '"') return sb.toString();
             if (c < 0x20) throw fail(pos - 1); // raw control character
             if (c != '\\') {
+                if (Character.isHighSurrogate(c)) {
+                    if (pos >= s.length() || !Character.isLowSurrogate(s.charAt(pos))) throw fail(pos - 1);
+                    sb.append(c).append(s.charAt(pos++));
+                    continue;
+                }
+                if (Character.isLowSurrogate(c)) throw fail(pos - 1);
                 sb.append(c);
                 continue;
             }
@@ -161,22 +167,40 @@ final class StrictJson {
                 case 'n': sb.append('\n'); break;
                 case 'r': sb.append('\r'); break;
                 case 't': sb.append('\t'); break;
-                case 'u':
-                    if (pos + 4 > s.length()) throw fail(pos);
-                    int cp = 0;
-                    for (int k = 0; k < 4; k++) {
-                        int d = Character.digit(s.charAt(pos + k), 16);
-                        if (d < 0 || s.charAt(pos + k) > 'f') throw fail(pos + k);
-                        cp = cp * 16 + d;
-                    }
-                    // A surrogate pair is two consecutive escapes; they concatenate into one code point.
-                    sb.append((char) cp);
+                case 'u': {
+                    int cp = hex4(pos);
                     pos += 4;
+                    if (Character.isHighSurrogate((char) cp)) {
+                        // must be followed by an escaped low surrogate
+                        if (pos + 6 > s.length() || s.charAt(pos) != '\\' || s.charAt(pos + 1) != 'u') throw fail(pos);
+                        int lo = hex4(pos + 2);
+                        if (!Character.isLowSurrogate((char) lo)) throw fail(pos + 2);
+                        sb.append((char) cp).append((char) lo);
+                        pos += 6;
+                    } else if (Character.isLowSurrogate((char) cp)) {
+                        throw fail(pos - 4);
+                    } else {
+                        sb.append((char) cp);
+                    }
                     break;
+                }
                 default:
                     throw fail(pos - 1);
             }
         }
+    }
+
+    /** Reads four hex digits at {@code at} (ASCII only). */
+    private int hex4(int at) throws KeyorixException {
+        if (at + 4 > s.length()) throw fail(at);
+        int v = 0;
+        for (int k = 0; k < 4; k++) {
+            char ch = s.charAt(at + k);
+            int d = ch > 'f' ? -1 : Character.digit(ch, 16);
+            if (d < 0) throw fail(at + k);
+            v = v * 16 + d;
+        }
+        return v;
     }
 
     private Num number() throws KeyorixException {

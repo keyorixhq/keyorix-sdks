@@ -11,7 +11,9 @@ All notable changes to the Java SDK are documented here.
   so `line1\nline2 "q"` arrived as `line1\\nline2 \\"q\\"`, and a value ending
   in a backslash was cut at the wrong quote. It now decodes `\" \\ \/ \b \f \n
   \r \t` and `\uXXXX` (surrogate pairs included); a malformed escape throws
-  `KeyorixException` instead of returning an altered value.
+  `KeyorixException` instead of returning an altered value. An unpaired
+  surrogate (`\ud800` without a following low-surrogate escape, or a lone low
+  one) is rejected the same way.
 - Responses are now parsed in full as strict JSON. A truncated or malformed
   body raises `KeyorixException` instead of returning a partial or empty
   list/value; a key is read only from the response's `data` object, not from a
