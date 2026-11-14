@@ -14,6 +14,7 @@ All notable changes to the Go SDK are documented here.
 
 ### Documentation and tests
 
+- Contract tests against a real server: `TestContract_MFALoginAndCompletion` (a separate user enrols TOTP; `Login` returns `*MFARequiredError`; a wrong code is an `*AuthError`; `VerifyMFA` with a correct code returns a working session) and `TestContract_SuspendedSecretIsTyped` (a suspended secret read is `*SecretUnavailableError`, code `SecretSuspended`). 503 `audit_unavailable` cannot be provoked on a healthy server, so it is covered by a fake-server test with the real body shape.
 - README: new Errors section (`AuthError`, `ForbiddenError`, `NotFoundError`,
   `SecretNotFoundError`, `AmbiguousSecretError`) and the Go requirement now
   matches `go.mod` (1.26.2, was documented as 1.21+).
