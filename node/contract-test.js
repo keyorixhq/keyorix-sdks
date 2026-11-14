@@ -22,7 +22,7 @@
 // Skipped unless KEYORIX_CONTRACT_SERVER_URL is set.
 
 const http = require('node:http');
-const { Client, login, AuthError, SecretAlreadyExistsError } = require('./keyorix');
+const { Client, login, AuthError, ForbiddenError, SecretAlreadyExistsError } = require('./keyorix');
 
 let passed = 0;
 let failed = 0;
@@ -264,6 +264,15 @@ async function runContractTests() {
     assert(Array.isArray(machineProjects) && machineProjects.length === 0, `listProjects() succeeds with an empty list for a zero-grant token — got ${machineProjects.length} projects`);
   } catch (e) {
     assert(false, `listProjects() succeeds with an empty list for a zero-grant token — got ${e.constructor.name}: ${e.message}`);
+  }
+
+  try {
+    // By ID, so the 403 comes from POST /api/v1/secrets itself, not a project lookup.
+    await machineClient.createSecret(defaultProject.id, devEnv.id, `${createdName}-forbidden`, createdValue);
+    assert(false, 'createSecret() with a zero-grant token should be rejected');
+  } catch (e) {
+    assert(e instanceof ForbiddenError, `createSecret() without secrets.write is ForbiddenError — got ${e.constructor.name}`);
+    assert(e.statusCode === 403 && !e.message.includes(createdValue) && !String(e.responseBody).includes(createdValue), 'createSecret() 403 error never echoes the value');
   }
 
   const forbiddenResp = await getJSON(serverUrl, `/api/v1/projects/${defaultProject.id}`, machineToken);
