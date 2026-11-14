@@ -289,6 +289,23 @@ class ContractTest {
     }
 
     @Test
+    void createSecretWithoutSecretsWriteIsForbidden() throws Exception {
+        Project defaultProject = client.listProjects().stream()
+                .filter(p -> p.getName().equals("default")).findFirst().orElseThrow();
+        long envId = client.listEnvironments(defaultProject.getId()).get(0).getId();
+        String value = "contract-create-value-do-not-use";
+        KeyorixClient machine = Keyorix.newClient(serverUrl, createMachineToken(token, defaultProject.getId()));
+        // By ID, so the 403 comes from POST /api/v1/secrets itself and not from
+        // a project lookup.
+        ForbiddenException e = assertThrows(ForbiddenException.class,
+                () -> machine.createSecret(defaultProject.getId(), envId,
+                        "contract-create-forbidden-" + System.nanoTime(), value, null, null));
+        assertEquals(403, e.getStatusCode());
+        assertFalse(String.valueOf(e.getMessage()).contains(value));
+        assertFalse(String.valueOf(e.getResponseBody()).contains(value));
+    }
+
+    @Test
     void createSecretUnauthenticatedIsAuthException() throws Exception {
         long projectId = client.listProjects().stream().filter(p -> "default".equals(p.getName())).findFirst().get().getId();
         long envId = client.listEnvironments(projectId).get(0).getId();
