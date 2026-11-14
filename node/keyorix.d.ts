@@ -81,6 +81,7 @@ export declare class SecretUnavailableError extends KeyorixError {}
 export declare class SecretNotFoundError extends KeyorixError {}
 /** createSecret: a live secret of that name already exists in the scope (409). */
 export declare class SecretAlreadyExistsError extends KeyorixError {}
+export declare class AuditUnavailableError extends KeyorixError {}
 export declare class AmbiguousSecretError extends KeyorixError {
   ids: number[];
 }

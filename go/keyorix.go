@@ -168,6 +168,22 @@ func (e *SecretAlreadyExistsError) Error() string {
 }
 func (e *SecretAlreadyExistsError) Unwrap() error { return e.APIError }
 
+// CodeAuditUnavailable is the stable error code the server sends with a 503 when
+// a mutation was refused because its audit row could not be recorded.
+const CodeAuditUnavailable = "audit_unavailable"
+
+// AuditUnavailableError indicates the server refused a write (HTTP 503, code
+// audit_unavailable) because the audit log could not take the row: nothing was
+// changed, and the same request is safe to retry unchanged once the audit log is
+// back. The server also sends a Retry-After header; this SDK does not surface
+// it. Unwraps to *APIError.
+type AuditUnavailableError struct{ *APIError }
+
+func (e *AuditUnavailableError) Error() string {
+	return "keyorix: the audit log is unavailable, so the change was refused and nothing was changed — retry later"
+}
+func (e *AuditUnavailableError) Unwrap() error { return e.APIError }
+
 // errorCode reads the error envelope's "error" field, or "".
 func errorCode(body string) string {
 	var env struct {
@@ -181,7 +197,7 @@ func errorCode(body string) string {
 
 // errorForResponse maps a non-2xx HTTP status to a typed error: AuthError
 // (401), ForbiddenError (403), NotFoundError (404), SecretUnavailableError (409
-// with a secret-state code), or the generic APIError
+// with a secret-state code), AuditUnavailableError (503 audit_unavailable), or the generic APIError
 // for anything else. Every request path returns through this so callers can
 // rely on errors.As matching consistently, regardless of which method failed.
 func errorForResponse(statusCode int, body string) error {
@@ -199,6 +215,11 @@ func errorForResponse(statusCode int, body string) error {
 		return &ForbiddenError{base}
 	case http.StatusNotFound:
 		return &NotFoundError{base}
+	case http.StatusServiceUnavailable:
+		if base.Code == CodeAuditUnavailable {
+			return &AuditUnavailableError{base}
+		}
+		return base
 	default:
 		return base
 	}

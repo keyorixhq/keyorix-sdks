@@ -739,7 +739,8 @@ public class KeyorixClient {
     /**
      * Maps a non-2xx HTTP status to a typed exception: AuthException (401),
      * ForbiddenException (403), NotFoundException (404),
-     * SecretUnavailableException (409 with a secret-state code), or the generic
+     * SecretUnavailableException (409 with a secret-state code),
+     * AuditUnavailableException (503 audit_unavailable), or the generic
      * KeyorixException for anything else. Every request path throws through
      * this so callers can catch the specific type they need, regardless of
      * which method failed.
@@ -767,6 +768,13 @@ public class KeyorixClient {
                     return new SecretUnavailableException("The secret has reached its maximum number of reads", status, body, code);
                 }
                 return new KeyorixException("Server returned " + status, status, body, code);
+            case 503:
+                if (CODE_AUDIT_UNAVAILABLE.equals(code)) {
+                    return new AuditUnavailableException(
+                        "The audit log is unavailable, so the change was refused and nothing was changed — retry later",
+                        status, body, code);
+                }
+                return new KeyorixException("Server returned " + status, status, body, code);
             default:
                 return new KeyorixException("Server returned " + status, status, body, code);
         }
@@ -779,6 +787,7 @@ public class KeyorixClient {
      * ({@link SecretUnavailableException}).
      */
     public static final String CODE_CONFLICT = "ConflictError";
+    public static final String CODE_AUDIT_UNAVAILABLE = "audit_unavailable";
     public static final String CODE_SECRET_ACCESS_OUTSIDE_SCHEDULE = "SecretAccessOutsideSchedule";
     public static final String CODE_SECRET_EXPIRED = "SecretExpired";
     public static final String CODE_SECRET_SUSPENDED = "SecretSuspended";

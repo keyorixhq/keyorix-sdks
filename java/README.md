@@ -160,6 +160,9 @@ contacting the server — use `getSecretScoped`/`listSecretsScoped` instead.
 - SecretNotFoundException — thrown by `getSecretScoped` when no secret in the scope has that name
 - SecretAlreadyExistsException — thrown by `createSecret` when the name is already taken in the scope (HTTP 409)
 - AmbiguousSecretException — secret name matched more than one secret in scope (`getIds()`)
+- AuditUnavailableException — a write was refused because the audit log could not
+  record it (HTTP 503, error code `audit_unavailable`). Nothing was changed, so the same
+  request is safe to retry later. The `Retry-After` header is not surfaced.
 
 ## Requirements
 

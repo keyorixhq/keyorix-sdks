@@ -6,6 +6,7 @@ All notable changes to the Go SDK are documented here.
 
 ### Added
 
+- `*AuditUnavailableError` (unwraps to `*APIError`, `Code` `audit_unavailable`, `CodeAuditUnavailable`): a write the server refused with 503 because the audit log could not record it. Nothing was changed and the request is safe to retry. Any other 503 stays a plain `*APIError`. `Retry-After` is not surfaced.
 - `Client.UpdateSecret(ctx, project, environment, name, value)` / `UpdateSecretByID(ctx, id, value)` (`PUT /api/v1/secrets/{id}`): write a new version of a secret, for scripted rotation. `Client.DeleteSecret(ctx, project, environment, name)` / `DeleteSecretByID(ctx, id)` (`DELETE /api/v1/secrets/{id}`): soft-delete, returning the purge date (`*time.Time`, nil if the server sent none). Typed errors as elsewhere (`*ForbiddenError`, `*NotFoundError`, `*SecretNotFoundError`, `*AmbiguousSecretError`); the value never appears in an error or in `APIError.Body`; an empty value is refused before any request. The purge date needs server v0.96.0+.
 - `CreateSecret(ctx, project, environment, name, value, opts...)` creates a secret (`POST /api/v1/secrets`) in a project+environment given by name or ID and returns its metadata. A taken name returns the new `*SecretAlreadyExistsError` (unwraps to `*APIError`). The value never appears in an error's text and is stripped from `APIError.Body` if the server echoes it.
 - `login` on an account with a second factor (MFA, the server default) now throws/raises/returns a typed MFA-required error carrying the challenge id and the available methods, instead of a generic "no token in login response". Complete it with the new `verifyMfa`/`verify_mfa`/`VerifyMFA` (TOTP or recovery code). Node, Python and Java: the new type extends the auth error `login` already threw, so existing handlers keep working.
@@ -13,6 +14,7 @@ All notable changes to the Go SDK are documented here.
 
 ### Documentation and tests
 
+- Contract tests against a real server: `TestContract_MFALoginAndCompletion` (a separate user enrols TOTP; `Login` returns `*MFARequiredError`; a wrong code is an `*AuthError`; `VerifyMFA` with a correct code returns a working session) and `TestContract_SuspendedSecretIsTyped` (a suspended secret read is `*SecretUnavailableError`, code `SecretSuspended`). 503 `audit_unavailable` cannot be provoked on a healthy server, so it is covered by a fake-server test with the real body shape.
 - README: new Errors section (`AuthError`, `ForbiddenError`, `NotFoundError`,
   `SecretNotFoundError`, `AmbiguousSecretError`) and the Go requirement now
   matches `go.mod` (1.26.2, was documented as 1.21+).

@@ -125,6 +125,18 @@ class SecretAlreadyExistsError extends KeyorixError {
 
 const CODE_CONFLICT = 'ConflictError';
 
+// Thrown when the server refused a write (HTTP 503, errorCode 'audit_unavailable')
+// because the audit log could not record it. Nothing was changed, so the same
+// request is safe to retry unchanged later. The Retry-After header is not surfaced.
+class AuditUnavailableError extends KeyorixError {
+  constructor(message, opts) {
+    super(message, opts);
+    this.name = 'AuditUnavailableError';
+  }
+}
+
+const CODE_AUDIT_UNAVAILABLE = 'audit_unavailable';
+
 // Removes every occurrence of value (raw and JSON-escaped) from a response
 // body, so a server that echoes request content into an error cannot put the
 // secret into KeyorixError.responseBody.
@@ -171,6 +183,12 @@ function errorForResponse(status, body) {
   if (status === 404) return new NotFoundError('Resource not found', opts);
   if (status === 409 && Object.prototype.hasOwnProperty.call(SECRET_UNAVAILABLE_MESSAGES, errorCode)) {
     return new SecretUnavailableError(SECRET_UNAVAILABLE_MESSAGES[errorCode], opts);
+  }
+  if (status === 503 && errorCode === CODE_AUDIT_UNAVAILABLE) {
+    return new AuditUnavailableError(
+      'The audit log is unavailable, so the change was refused and nothing was changed — retry later',
+      opts,
+    );
   }
   return new KeyorixError(`Server returned ${status}`, opts);
 }
@@ -839,5 +857,6 @@ module.exports = {
   SecretUnavailableError,
   SecretNotFoundError,
   SecretAlreadyExistsError,
+  AuditUnavailableError,
   AmbiguousSecretError,
 };
