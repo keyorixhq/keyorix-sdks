@@ -217,6 +217,19 @@ class TestContractFullClientSurface(unittest.TestCase):
         self.assertNotIn(value, str(ctx.exception))
         self.assertNotIn(value, ctx.exception.response_body or "")
 
+    def test_create_secret_without_secrets_write_is_forbidden(self):
+        default = next(p for p in self.client.list_projects() if p.name == "default")
+        env = next(e for e in self.client.list_environments(default.id) if e.name == "development")
+        value = "contract-create-value-do-not-use"
+        machine = keyorix.Client(SERVER_URL, _create_machine_token(self.token, default.id))
+        # By ID, so the 403 comes from POST /api/v1/secrets itself and not
+        # from a project lookup.
+        with self.assertRaises(keyorix.ForbiddenError) as ctx:
+            machine.create_secret(default.id, env.id, f"contract-create-forbidden-{time.time_ns()}", value)
+        self.assertEqual(ctx.exception.status_code, 403)
+        self.assertNotIn(value, str(ctx.exception))
+        self.assertNotIn(value, ctx.exception.response_body or "")
+
     def test_create_secret_unauthenticated_is_auth_error(self):
         default = next(p for p in self.client.list_projects() if p.name == "default")
         env = next(e for e in self.client.list_environments(default.id) if e.name == "development")

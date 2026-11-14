@@ -606,6 +606,23 @@ func TestContract_CreateSecret(t *testing.T) {
 		}
 	})
 
+	t.Run("a token without secrets.write is *ForbiddenError and never echoes the value", func(t *testing.T) {
+		machine, err := New(serverURL, createMachineToken(t, serverURL, token, created.ProjectID))
+		if err != nil {
+			t.Fatalf("New: %v", err)
+		}
+		// By ID: a by-name call would list projects first, which a zero-grant
+		// token may do, but the 403 under test must come from POST /secrets.
+		_, err = machine.CreateSecret(ctx, ProjectByID(created.ProjectID), EnvironmentByID(1), name+"-forbidden", value)
+		var forbidden *ForbiddenError
+		if !errors.As(err, &forbidden) {
+			t.Fatalf("got %T (%v), want *ForbiddenError", err, err)
+		}
+		if forbidden.StatusCode != http.StatusForbidden || strings.Contains(err.Error(), value) || strings.Contains(forbidden.Body, value) {
+			t.Errorf("unexpected forbidden error: status %d, text %q, body %q", forbidden.StatusCode, err.Error(), forbidden.Body)
+		}
+	})
+
 	t.Run("an unauthenticated call is *AuthError", func(t *testing.T) {
 		for _, tok := range []string{"not-a-valid-token", ""} {
 			bad, err := New(serverURL, tok)
