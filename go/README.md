@@ -225,7 +225,11 @@ Test with `errors.As`:
 - `*keyorix.SecretNotFoundError` — returned by `GetSecretScoped` when no secret in the scope has that name
 - `*keyorix.AmbiguousSecretError` — the name matched more than one secret in scope
 - `*keyorix.SecretAlreadyExistsError` — returned by `CreateSecret` when the name is already taken in the scope (HTTP 409)
-- `*keyorix.APIError` — any other non-2xx response (the 401/403/404 types above unwrap to it)
+- `*keyorix.AuditUnavailableError` — a write was refused because the audit log could
+  not record it (HTTP 503, code `audit_unavailable`). Nothing was changed, so the same
+  request is safe to retry unchanged later. The server's `Retry-After` header is not
+  surfaced.
+- `*keyorix.APIError` — any other non-2xx response (the typed errors above unwrap to it)
 
 ## Requirements
 
