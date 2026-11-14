@@ -13,6 +13,7 @@ const {
   SecretUnavailableError,
   SecretNotFoundError,
   SecretAlreadyExistsError,
+  AuditUnavailableError,
   AmbiguousSecretError,
 } = require('./keyorix');
 
@@ -251,6 +252,43 @@ async function runTests() {
       }
     } finally {
       createServer.close();
+    }
+  }
+
+  // 503 audit_unavailable: the server refused a write because its audit row could not be
+  // recorded (real body shape: server/http/handlers/audit_unavailable.go). Typed, and a
+  // different 503 stays a plain KeyorixError.
+  {
+    const secretValue = 'audit-s3cr3t-must-not-leak';
+    let code = 'audit_unavailable';
+    const auditServer = http.createServer((req, res) => {
+      req.resume();
+      req.on('end', () => {
+        res.writeHead(503, { 'Content-Type': 'application/json', 'Retry-After': '5' });
+        res.end(JSON.stringify({ success: false, code: 503, error: code, message: `echo ${secretValue}` }));
+      });
+    });
+    await new Promise((resolve) => auditServer.listen(0, resolve));
+    try {
+      const c = new Client(`http://localhost:${auditServer.address().port}`, 'tok');
+      try {
+        await c.createSecret(3, 4, 'n', secretValue);
+        assert(false, 'createSecret should have thrown on 503 audit_unavailable');
+      } catch (e) {
+        assert(e instanceof AuditUnavailableError && e instanceof KeyorixError, '503 audit_unavailable is AuditUnavailableError');
+        assert(e.statusCode === 503 && e.errorCode === 'audit_unavailable', 'AuditUnavailableError carries status and code');
+        assert(!e.message.includes(secretValue) && !String(e.responseBody).includes(secretValue), 'value is absent from the audit error');
+      }
+
+      code = 'storage_unavailable';
+      try {
+        await c.createSecret(3, 4, 'n', secretValue);
+        assert(false, 'createSecret should have thrown on 503');
+      } catch (e) {
+        assert(!(e instanceof AuditUnavailableError) && e instanceof KeyorixError && e.statusCode === 503, 'other 503 stays a plain KeyorixError');
+      }
+    } finally {
+      auditServer.close();
     }
   }
 
