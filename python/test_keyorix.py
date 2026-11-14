@@ -210,6 +210,34 @@ class TestClient(unittest.TestCase):
         self.assertNotIsInstance(ctx.exception, keyorix.SecretUnavailableError)
         self.assertEqual(ctx.exception.code, "ConflictError")
 
+    # 503 audit_unavailable (real body shape: server/http/handlers/audit_unavailable.go):
+    # the write was refused and nothing changed. Typed; any other 503 stays generic.
+    @patch("urllib.request.urlopen")
+    def test_audit_unavailable_is_typed(self, mock_urlopen):
+        body = json.dumps({"success": False, "code": 503, "error": "audit_unavailable", "message": "SERVER-TEXT"})
+        mock_urlopen.side_effect = urllib.error.HTTPError(
+            "http://localhost:8080/api/v1/secrets", 503, "x", {"Retry-After": "5"}, io.BytesIO(body.encode())
+        )
+        client = keyorix.Client("http://localhost:8080", "test-token")
+        with self.assertRaises(keyorix.AuditUnavailableError) as ctx:
+            client.create_secret(3, 4, "n", "audit-s3cr3t-not-in-body")
+        self.assertIsInstance(ctx.exception, keyorix.KeyorixError)
+        self.assertEqual(ctx.exception.status_code, 503)
+        self.assertEqual(ctx.exception.code, "audit_unavailable")
+        self.assertNotIn("SERVER-TEXT", str(ctx.exception))
+
+    @patch("urllib.request.urlopen")
+    def test_other_503_stays_generic(self, mock_urlopen):
+        body = json.dumps({"error": "storage_unavailable", "message": "x"})
+        mock_urlopen.side_effect = urllib.error.HTTPError(
+            "http://localhost:8080/api/v1/secrets", 503, "x", {}, io.BytesIO(body.encode())
+        )
+        client = keyorix.Client("http://localhost:8080", "test-token")
+        with self.assertRaises(keyorix.KeyorixError) as ctx:
+            client.create_secret(3, 4, "n", "audit-s3cr3t-not-in-body")
+        self.assertNotIsInstance(ctx.exception, keyorix.AuditUnavailableError)
+        self.assertEqual(ctx.exception.status_code, 503)
+
     # ── TLS with a private CA ───────────────────────────────────────────────────
     # Proves the ca_file option actually gets verified against, not just
     # plumbed through and ignored. Uses a throwaway self-signed cert

@@ -271,6 +271,19 @@ class SecretAlreadyExistsError(KeyorixError):
     pass
 
 
+CODE_AUDIT_UNAVAILABLE = "audit_unavailable"
+
+
+class AuditUnavailableError(KeyorixError):
+    """Raised when the server refused a write (HTTP 503, code
+    ``audit_unavailable``) because the audit log could not record it. Nothing was
+    changed, so the same request is safe to retry unchanged later. The
+    ``Retry-After`` header is not surfaced.
+    """
+
+    pass
+
+
 def _redact_value(body: str, value: str) -> str:
     """Remove every occurrence of ``value`` (raw and JSON-escaped) from a
     response body, so a server that echoes request content into an error
@@ -312,6 +325,13 @@ def _error_for_response(status_code: int, body: str) -> KeyorixError:
     if status_code == 409 and code in _SECRET_UNAVAILABLE_MESSAGES:
         return SecretUnavailableError(
             _SECRET_UNAVAILABLE_MESSAGES[code], status_code=status_code, response_body=body, code=code
+        )
+    if status_code == 503 and code == CODE_AUDIT_UNAVAILABLE:
+        return AuditUnavailableError(
+            "The audit log is unavailable, so the change was refused and nothing was changed — retry later",
+            status_code=status_code,
+            response_body=body,
+            code=code,
         )
     return KeyorixError(f"Server returned {status_code}", status_code=status_code, response_body=body, code=code)
 
